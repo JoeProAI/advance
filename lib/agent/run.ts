@@ -1,15 +1,24 @@
-import { HEATMAP_REGIONS, findCity } from "@/lib/geo/cities";
+import { findCity } from "@/lib/geo/cities";
+import { pickByTier, roomSize } from "@/lib/agent/rooms";
 import { createQlooClient, isHeatmapResponse } from "@/lib/qloo/client";
-import { cityHeatmapParams } from "@/lib/qloo/request";
+import { isAuthOrTypeError } from "@/lib/qloo/errors";
+import {
+  cellsToCities,
+  entityDescription,
+  entityKind,
+  entityPopularity,
+  entityTags,
+  explainScore,
+  matchSearchHit,
+} from "@/lib/qloo/parse";
+import { PLACE_TAGS, cityHeatmapParams } from "@/lib/qloo/request";
 import { harnessLabel } from "@/lib/qloo/workflows";
-import type { QlooEntity, QlooEntitiesResponse, QlooHeatmapCell, QlooHeatmapResponse } from "@/lib/qloo/types";
+import type { QlooEntitiesResponse, QlooEntity } from "@/lib/qloo/types";
 import { assignDates, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
 import { createId } from "@/lib/utils";
 import { resolveWriter, writeBrief, writeSummary } from "@/lib/agent/write";
 import type {
-  ActKind,
   AgentStep,
-  CandidateCity,
   OpenerPick,
   PlanRequest,
   PromoBrief,
@@ -40,253 +49,205 @@ function step(
   };
 }
 
-function roomFromPopularity(popularity: number, tier: PlanRequest["budgetTier"]): string {
-  if (tier === "rooms" || popularity < 0.35) {
-    return "estimate: 150–400 cap";
-  }
-  if (tier === "theaters" || popularity > 0.7) {
-    return "estimate: 600–1,200 cap";
-  }
-  return "estimate: 300–700 cap";
-}
-
-function kindFromSubtype(subtype: string | undefined, fallback: ActKind): ActKind {
-  if (subtype?.includes("person")) {
-    return "person";
-  }
-  if (subtype?.includes("artist")) {
-    return "artist";
-  }
-  return fallback;
-}
-
 function asNumber(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function explain(entity: QlooEntity, actName: string, cityName: string): string {
+type Client = ReturnType<typeof createQlooClient>;
+type Emit = (next: AgentStep) => Promise<void>;
+
+const GENERIC_AMBIENCE = new Set(["Casual", "Social", "Lively", "Place", "Tourist attraction"]);
+const VENUE_CATEGORIES = [
+  "Comedy club",
+  "Concert hall",
+  "Performing arts theater",
+  "Live music bar",
+  "Live music venue",
+  "Night club",
+  "Event venue",
+];
+
+function explain(entity: QlooEntity, act: ResolvedAct, cityName: string): string {
   const parts: string[] = [cityName];
-  const kind = entity.properties?.place_kind;
-  if (kind) {
-    parts.push(kind);
+  const neighborhood = entity.properties?.geocode?.name;
+  if (neighborhood && neighborhood !== cityName) {
+    parts.push(neighborhood);
   }
-  const capacity = entity.properties?.capacity;
-  if (typeof capacity === "number") {
-    parts.push(`${capacity} cap`);
+  const tags = entityTags(entity);
+  const names = new Set(tags.map((tag) => tag.name));
+  const category = VENUE_CATEGORIES.find((name) => names.has(name));
+  if (category) {
+    parts.push(category.toLowerCase());
   }
   const affinity = entity.query?.affinity;
   if (typeof affinity === "number") {
     parts.push(`aff ${affinity.toFixed(2)}`);
   }
-  const genericTags = new Set(["Music Venue", "Comedy Club", "Nightclub", "Bar", "Restaurant"]);
-  const tags = (entity.properties?.tags ?? []).map((tag) => tag.name).filter(Boolean);
-  const taste = tags.find((tag) => !genericTags.has(tag));
+  const taste = tags.find(
+    (tag) => tag.type?.includes("ambience") && !GENERIC_AMBIENCE.has(tag.name) && !["Intimate", "Cozy"].includes(tag.name),
+  );
   if (taste) {
-    parts.push(taste);
+    parts.push(taste.name);
   }
-  const signal = entity.query?.explainability?.signals?.[0];
-  if (signal && typeof signal.score === "number") {
-    parts.push(`overlap ${signal.score.toFixed(2)}`);
+  const score = explainScore(entity, act.entityId);
+  if (typeof score === "number") {
+    parts.push(`explained by ${act.name} ${score.toFixed(2)}`);
   }
   if (parts.length <= 1) {
-    return `matched to ${actName}'s audience in ${cityName}`;
+    return `matched to ${act.name}'s audience in ${cityName}`;
   }
   return parts.join(" · ");
 }
 
-async function resolveTagId(
-  client: ReturnType<typeof createQlooClient>,
-  query: string,
-): Promise<string | undefined> {
-  const tags = await client.tags(query);
-  const hit = tags.results.tags.find((tag) => {
-    const id = tag.id ?? tag.tag_id;
-    return Boolean(id?.startsWith("urn:tag:"));
-  });
-  return hit?.id ?? hit?.tag_id;
+function holdVenue(cityName: string, why: string): VenuePick {
+  return {
+    entityId: "thin",
+    name: "Hold",
+    city: cityName,
+    affinity: 0,
+    popularity: 0,
+    estimatedRoom: "Size unknown.",
+    why,
+    tags: [],
+  };
 }
 
-function cellsToCities(cells: QlooHeatmapCell[]): CandidateCity[] {
-  const byName = new Map<string, CandidateCity>();
-  for (const cell of cells) {
-    const name = cell.location.name ?? "";
-    const known = name ? findCity(name) : undefined;
-    const city: CandidateCity = {
-      name: known?.name ?? name ?? "Unknown",
-      region: known?.region ?? cell.location.admin1_region ?? "US",
-      country: known?.country ?? "US",
-      lat: known?.lat ?? cell.location.latitude,
-      lon: known?.lon ?? cell.location.longitude,
-      affinity: cell.query.affinity,
-      affinityRank: cell.query.affinity_rank,
-      popularity: cell.query.popularity,
-    };
-    if (!city.name || city.name === "Unknown") {
-      continue;
-    }
-    const existing = byName.get(city.name);
-    if (!existing || existing.affinity < city.affinity) {
-      byName.set(city.name, city);
-    }
-  }
-  return [...byName.values()];
-}
-
-function citiesFromInsights(raw: QlooEntitiesResponse | QlooHeatmapResponse): CandidateCity[] {
-  if (isHeatmapResponse(raw)) {
-    return cellsToCities(raw.results.heatmap);
-  }
-  const byName = new Map<string, CandidateCity>();
-  for (const entity of raw.results.entities) {
-    const name = entity.properties?.geocode?.name ?? entity.name;
-    const known = name ? findCity(name) : undefined;
-    if (!name) {
-      continue;
-    }
-    const city: CandidateCity = {
-      name: known?.name ?? name,
-      region: known?.region ?? entity.properties?.geocode?.admin1_region ?? "US",
-      country: known?.country ?? "US",
-      lat: known?.lat ?? entity.properties?.geocode?.latitude ?? 0,
-      lon: known?.lon ?? entity.properties?.geocode?.longitude ?? 0,
-      affinity: asNumber(entity.query?.affinity, 0.5),
-      affinityRank: asNumber(entity.query?.affinity_rank, 0.5),
-      popularity: asNumber(entity.properties?.popularity ?? entity.popularity, 0.4),
-    };
-    const existing = byName.get(city.name);
-    if (!existing || existing.affinity < city.affinity) {
-      byName.set(city.name, city);
-    }
-  }
-  return [...byName.values()];
-}
-
-async function pickVenue(
-  client: ReturnType<typeof createQlooClient>,
-  act: ResolvedAct,
-  cityName: string,
-  tagId: string | undefined,
-  request: PlanRequest,
-): Promise<VenuePick> {
-  const popularity =
-    request.budgetTier === "rooms"
-      ? { "filter.popularity.max": 0.55 }
-      : request.budgetTier === "theaters"
-        ? { "filter.popularity.min": 0.4 }
-        : {};
+async function pickVenue(client: Client, act: ResolvedAct, cityName: string, request: PlanRequest): Promise<VenuePick> {
+  const tagId = act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue;
   const raw = await client.insights({
     "filter.type": "urn:entity:place",
-    ...(tagId ? { "filter.tags": tagId } : {}),
+    "filter.tags": tagId,
     "filter.location.query": cityName,
     "signal.interests.entities": act.entityId,
     "feature.explainability": true,
     take: 8,
-    ...popularity,
   });
-  if (isHeatmapResponse(raw) || raw.results.entities.length === 0) {
-    return {
-      entityId: "thin",
-      name: "Hold",
-      city: cityName,
-      affinity: 0,
-      popularity: 0,
-      estimatedRoom: "estimate unavailable",
-      why: "Qloo returned no venue-tagged places for this city.",
-      tags: [],
-    };
+  const entities = isHeatmapResponse(raw) ? [] : raw.results.entities;
+  const entity = pickByTier(entities, request.budgetTier);
+  if (!entity) {
+    return holdVenue(cityName, "Qloo returned no venue-tagged places for this city.");
   }
-  const entity = raw.results.entities[0]!;
-  const popularityScore = asNumber(entity.properties?.popularity ?? entity.popularity, 0.3);
-  const capacity = entity.properties?.capacity;
-  const kind = entity.properties?.place_kind;
-  const estimatedRoom =
-    typeof capacity === "number"
-      ? `${capacity}-cap ${kind ?? "room"}`
-      : roomFromPopularity(popularityScore, request.budgetTier);
   return {
     entityId: entity.entity_id,
     name: entity.name,
     city: cityName,
-    affinity: asNumber(entity.query?.affinity, 0.5),
-    popularity: popularityScore,
-    estimatedRoom,
-    why: explain(entity, act.name, cityName),
-    tags: (entity.properties?.tags ?? []).map((tag) => tag.name),
+    affinity: asNumber(entity.query?.affinity, 0),
+    popularity: entityPopularity(entity, 0),
+    estimatedRoom: roomSize(entity).label,
+    why: explain(entity, act, cityName),
+    tags: entityTags(entity).map((tag) => tag.name),
   };
 }
 
 async function pickOpeners(
-  client: ReturnType<typeof createQlooClient>,
+  client: Client,
   act: ResolvedAct,
   cityName: string,
+  used: Set<string>,
 ): Promise<OpenerPick[]> {
   const type = act.kind === "person" ? "urn:entity:person" : "urn:entity:artist";
+  // Openers should draw less than the headliner. Cap at the act's own
+  // popularity percentile instead of a fixed 0.45, which returned obscure
+  // picks for every act probed.
+  const cap = Math.max(0.3, Math.min(0.99, act.popularity));
   const raw = await client.insights({
     "filter.type": type,
     "signal.interests.entities": act.entityId,
     "signal.location.query": cityName,
-    "filter.popularity.max": 0.45,
-    take: 6,
+    "filter.exclude.entities": act.entityId,
+    "filter.popularity.max": Number(cap.toFixed(3)),
+    take: 8,
   });
   if (isHeatmapResponse(raw)) {
     return [];
   }
-  const entities = raw.results.entities.slice(0, 2);
+  const fresh = raw.results.entities.filter((entity) => entity.entity_id !== act.entityId && !used.has(entity.entity_id));
+  const entities = (fresh.length >= 2 ? fresh : raw.results.entities.filter((e) => e.entity_id !== act.entityId)).slice(0, 2);
   const compared = await Promise.all(
     entities.map((entity) => client.compare([act.entityId], [entity.entity_id])),
   );
   return entities.map((entity, index) => {
-    const overlap = compared[index]?.results.overlap ?? 0;
-    const affinity = asNumber(entity.query?.affinity, 0.5);
-    const note = entity.properties?.description ?? `local ${act.kind === "person" ? "comic" : "act"}`;
+    used.add(entity.entity_id);
+    const result = compared[index]?.results;
+    const overlap = result?.overlap ?? 0;
+    const affinity = asNumber(entity.query?.affinity, 0);
+    const shared = result?.shared_tags?.slice(0, 2).join(", ");
+    const note = shared ? `shares ${shared}` : entityDescription(entity) || "audience pick";
     return {
       entityId: entity.entity_id,
       name: entity.name,
-      kind: act.kind,
+      kind: entityKind(entity, act.kind),
       affinity,
-      popularity: asNumber(entity.properties?.popularity ?? entity.popularity, 0.15),
+      popularity: entityPopularity(entity, 0),
       overlap,
-      why: `${entity.name} in ${cityName}: overlap ${overlap.toFixed(2)} · affinity ${affinity.toFixed(2)} · ${note}`,
+      why: `${entity.name} for ${cityName}: overlap ${overlap.toFixed(2)} · affinity ${affinity.toFixed(2)} · ${note}`,
     };
   });
 }
 
 async function promoFacts(
-  client: ReturnType<typeof createQlooClient>,
+  client: Client,
   act: ResolvedAct,
   cityName: string,
   sharedTags: string[],
 ): Promise<{ podcasts: string[]; bars: string[]; brands: string[]; tags: string[] }> {
-  const barTag = await resolveTagId(client, "bar");
-  const [podcastsRaw, barsRaw, brandsRaw] = await Promise.all([
-    client.insights({
-      "filter.type": "urn:entity:podcast",
-      "signal.interests.entities": act.entityId,
-      "signal.location.query": cityName,
-      take: 4,
-    }),
-    client.insights({
-      "filter.type": "urn:entity:place",
-      ...(barTag ? { "filter.tags": barTag } : {}),
-      "filter.location.query": cityName,
-      "signal.interests.entities": act.entityId,
-      take: 4,
-    }),
-    client.insights({
-      "filter.type": "urn:entity:brand",
-      "signal.interests.entities": act.entityId,
-      "signal.location.query": cityName,
-      take: 4,
-    }),
-  ]);
-  const names = (raw: typeof podcastsRaw) =>
+  const names = (raw: Awaited<ReturnType<Client["insights"]>>) =>
     isHeatmapResponse(raw) ? [] : raw.results.entities.map((entity) => entity.name);
+  const empty: QlooEntitiesResponse = { success: true, results: { entities: [] } };
+  const soft = (promise: ReturnType<Client["insights"]>) =>
+    promise.catch((error: unknown) => {
+      if (isAuthOrTypeError(error)) {
+        throw error;
+      }
+      return empty;
+    });
+  const [podcastsRaw, barsRaw, brandsRaw] = await Promise.all([
+    soft(
+      client.insights({
+        "filter.type": "urn:entity:podcast",
+        "signal.interests.entities": act.entityId,
+        "signal.location.query": cityName,
+        take: 4,
+      }),
+    ),
+    soft(
+      client.insights({
+        "filter.type": "urn:entity:place",
+        "filter.tags": PLACE_TAGS.bar,
+        "filter.location.query": cityName,
+        "signal.interests.entities": act.entityId,
+        take: 4,
+      }),
+    ),
+    soft(
+      client.insights({
+        "filter.type": "urn:entity:brand",
+        "signal.interests.entities": act.entityId,
+        "signal.location.query": cityName,
+        take: 4,
+      }),
+    ),
+  ]);
   return {
     podcasts: names(podcastsRaw),
     bars: names(barsRaw),
     brands: names(brandsRaw),
     tags: sharedTags,
   };
+}
+
+/** Run a Qloo step; 401/403 still fail the plan, anything else degrades. */
+async function softly<T>(emit: Emit, label: string, fallback: T, run: () => Promise<T>): Promise<{ value: T; failed: boolean }> {
+  try {
+    return { value: await run(), failed: false };
+  } catch (error) {
+    if (isAuthOrTypeError(error)) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : "unknown error";
+    await emit(step(`${label} came back thin`, message.slice(0, 200), undefined, "warn"));
+    return { value: fallback, failed: true };
+  }
 }
 
 export async function runTourAgent(
@@ -311,9 +272,21 @@ export async function runTourAgent(
   const searchTypes =
     request.kindHint === "person" ? "urn:entity:person" : "urn:entity:artist,urn:entity:person";
   const found = await client.search({ query: request.actName, types: searchTypes, take: 5 });
-  const hit = found.results.entities[0];
-  if (!hit) {
-    await emit(step("Act not found", "Search returned no entities.", "GET /search", "error"));
+  const match = matchSearchHit(request.actName, found.results.entities);
+  if (!match.ok) {
+    const suggestion = match.suggestions.length
+      ? `No exact Qloo match for “${request.actName}”. Did you mean ${match.suggestions.join(", ")}?`
+      : `No Qloo entity for “${request.actName}”. Try a clearer name.`;
+    await emit(
+      step(
+        match.suggestions.length ? "Did you mean" : "Act not found",
+        match.suggestions.length
+          ? `Search came back with ${match.suggestions.join(", ")}, not “${request.actName}”. Not routing a different act.`
+          : "Search returned no entities.",
+        "GET /search",
+        "error",
+      ),
+    );
     return {
       status: "error",
       request,
@@ -321,57 +294,53 @@ export async function runTourAgent(
       steps,
       route: null,
       summary: "",
-      error: `No Qloo entity for “${request.actName}”. Try a clearer name.`,
+      error: suggestion,
       qlooMode: client.mode,
       writer,
       thinData: true,
     };
   }
+  const hit = match.entity;
 
   await emit(step("Loading entity details", hit.name, `GET /entities · ${harnessLabel("describe")}`));
-  const details = await client.entities([hit.entity_id]);
-  const entity = details.results.entities[0] ?? hit;
-  await emit(
-    step(
-      "Checking momentum",
-      "Week-over-week via /trends/entity.",
-      `GET /trends/entity · ${harnessLabel("trends")}`,
-    ),
-  );
+  const details = await softly(emit, "Entity details", null, () => client.entities([hit.entity_id]));
+  const entity: QlooEntity = details.value?.results.entities[0] ?? hit;
   const trend = await client.trends(entity.entity_id);
+  if (trend.results.available) {
+    await emit(
+      step(
+        "Checking momentum",
+        "Week-over-week via /trends/entity.",
+        `GET /trends/entity · ${harnessLabel("trends")}`,
+      ),
+    );
+  }
   const act: ResolvedAct = {
     entityId: entity.entity_id,
     name: entity.name,
-    kind: kindFromSubtype(entity.subtype, request.kindHint ?? "artist"),
-    description: entity.properties?.description ?? "",
-    popularity: asNumber(entity.properties?.popularity ?? entity.popularity, 0.3),
-    trend: {
-      available: trend.results.available,
-      delta: trend.results.delta,
-      note: trend.results.note,
-    },
+    kind: entityKind(entity, entityKind(hit, request.kindHint ?? "artist")),
+    description: entityDescription(entity),
+    popularity: entityPopularity(entity, entityPopularity(hit, 0.5)),
+    ...(trend.results.available
+      ? {
+          trend: {
+            available: true,
+            delta: trend.results.delta,
+            note: trend.results.note,
+          },
+        }
+      : {}),
   };
 
   await emit(
     step(
       `Finding where fans of ${act.name} cluster`,
-      `City-level heatmaps over ${HEATMAP_REGIONS.length} regions.`,
-      `GET /v2/insights?filter.type=urn:entity:destination&output.heatmap.boundary=city · ${harnessLabel("where_popular")}`,
+      "One national heatmap over the lower 48, cells snapped to the nearest tour city. City score is affinity × cell popularity.",
+      `GET /v2/insights?filter.type=urn:heatmap · ${harnessLabel("where_popular")}`,
     ),
   );
-  const byCity = new Map<string, CandidateCity>();
-  for (const region of HEATMAP_REGIONS) {
-    const heat = await client.insights(
-      cityHeatmapParams({ entityId: act.entityId, locationQuery: region.query, take: 20 }),
-    );
-    for (const city of citiesFromInsights(heat)) {
-      const existing = byCity.get(city.name);
-      if (!existing || existing.affinity < city.affinity) {
-        byCity.set(city.name, city);
-      }
-    }
-  }
-  const candidates = [...byCity.values()].sort((a, b) => b.affinity - a.affinity);
+  const heat = await softly(emit, "Heatmap", null, () => client.insights(cityHeatmapParams({ entityId: act.entityId })));
+  const candidates = heat.value && isHeatmapResponse(heat.value) ? cellsToCities(heat.value.results.heatmap) : [];
   if (candidates.length === 0) {
     await emit(
       step("Heatmap empty", "No city-level cells. The sheet stays blank.", undefined, "error"),
@@ -408,20 +377,16 @@ export async function runTourAgent(
 
   await emit(
     step(
-      "Resolving venue tags",
-      "Looking up music venue / comedy club tag IDs.",
-      `GET /v2/tags · ${harnessLabel("find_tags")}`,
-    ),
-  );
-  const venueTag = await resolveTagId(client, act.kind === "person" ? "comedy club" : "music venue");
-  await emit(
-    step(
       "Taste analysis",
       "Shared audience tags already on the act record, reused on every stop.",
       `GET /entities · ${harnessLabel("entity_tags")}`,
     ),
   );
-  const sharedTags = (entity.properties?.tags ?? []).map((tag) => tag.name).slice(0, 8);
+  const sharedTags = entityTags(entity)
+    .filter((tag) => !tag.type?.includes("keyword"))
+    .map((tag) => tag.name)
+    .slice(0, 8);
+  const usedOpeners = new Set<string>();
 
   const stops: RoutedStop[] = [];
   let thin = candidates.length < request.showCount;
@@ -430,22 +395,32 @@ export async function runTourAgent(
     await emit(
       step(
         `Scoring venues in ${city.name}`,
-        venueTag ? `filter.tags=${venueTag}` : "place insights with the act as signal",
+        `filter.tags=${act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue}`,
         `GET /v2/insights?filter.type=urn:entity:place · ${harnessLabel("recommend")}`,
       ),
     );
-    const venue = await pickVenue(client, act, city.name, venueTag, request);
+    const venue = (
+      await softly(emit, `Venues in ${city.name}`, holdVenue(city.name, "Qloo venue call failed for this city."), () =>
+        pickVenue(client, act, city.name, request),
+      )
+    ).value;
     if (venue.entityId === "thin") {
       thin = true;
     }
     await emit(
       step(
         `Local openers in ${city.name}`,
-        `Emerging ${act.kind === "person" ? "comics" : "artists"} plus compare.`,
+        `${act.kind === "person" ? "Comics" : "Artists"} below the headliner's popularity, weighted to ${city.name}, plus compare.`,
         `GET /v2/insights + /v2/insights/compare · ${harnessLabel("compare_audiences")}`,
       ),
     );
-    const openers = await pickOpeners(client, act, city.name);
+    const openersRun = await softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
+      pickOpeners(client, act, city.name, usedOpeners),
+    );
+    const openers = openersRun.value;
+    if (openersRun.failed || openers.length === 0) {
+      thin = true;
+    }
     await emit(
       step(
         `Promo brief for ${city.name}`,
@@ -453,7 +428,14 @@ export async function runTourAgent(
         `GET /v2/insights (podcast, place, brand) · ${harnessLabel("recommend")}`,
       ),
     );
-    const promo = await promoFacts(client, act, city.name, sharedTags);
+    const promo = (
+      await softly(
+        emit,
+        `Promo for ${city.name}`,
+        { podcasts: [], bars: [], brands: [], tags: sharedTags },
+        () => promoFacts(client, act, city.name, sharedTags),
+      )
+    ).value;
     const brief: PromoBrief = await writeBrief({
       act,
       city: city.name,

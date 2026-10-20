@@ -10,6 +10,7 @@ const ALLOW_KEY_NAME = [
   "lib/qloo/live.ts",
   "scripts/qloo-smoke.ts",
   "tests/qloo-key-leak.test.ts",
+  "tests/agent-run.test.ts",
   "README.md",
   ".env.example",
   "docs/SUBMISSION.md",

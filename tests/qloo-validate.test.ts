@@ -3,6 +3,7 @@ import { allowedParamsFor, validateInsightsParams } from "@/lib/qloo/validate";
 import { createQlooClient } from "@/lib/qloo/client";
 import { isInsightType } from "@/lib/qloo/validate";
 import { cityHeatmapParams } from "@/lib/qloo/request";
+import { cellsToCities } from "@/lib/qloo/parse";
 
 describe("validateInsightsParams", () => {
   it("rejects a missing or unknown filter.type", () => {
@@ -15,34 +16,40 @@ describe("validateInsightsParams", () => {
 
     const heatmapType = validateInsightsParams({ "filter.type": "urn:heatmap" });
     expect(heatmapType.ok).toBe(false);
-    expect(isInsightType("urn:heatmap")).toBe(false);
+    expect(isInsightType("urn:heatmap")).toBe(true);
     expect(isInsightType("urn:tag")).toBe(false);
   });
 
-  it("requires location and a signal for heatmap output", () => {
+  it("requires location and a signal for urn:heatmap", () => {
     const noLocation = validateInsightsParams({
-      "filter.type": "urn:entity:destination",
+      "filter.type": "urn:heatmap",
       "signal.interests.entities": "abc",
-      "output.heatmap.boundary": "city",
     });
     expect(noLocation.ok).toBe(false);
     expect(noLocation.errors.join(" ")).toMatch(/filter\.location/);
 
     const noSignal = validateInsightsParams({
-      "filter.type": "urn:entity:destination",
-      "filter.location.query": "Midwest United States",
-      "output.heatmap.boundary": "city",
+      "filter.type": "urn:heatmap",
+      "filter.location": "POLYGON((-97 37, -80 37, -80 49, -97 49, -97 37))",
     });
     expect(noSignal.ok).toBe(false);
 
-    const ok = validateInsightsParams(cityHeatmapParams({
-      entityId: "00000000-1111-4000-8000-000000000001",
-      locationQuery: "Midwest United States",
-      take: 20,
-    }));
+    const ok = validateInsightsParams(cityHeatmapParams({ entityId: "00000000-1111-4000-8000-000000000001" }));
     expect(ok.ok).toBe(true);
-    expect(ok.params["filter.type"]).toBe("urn:entity:destination");
-    expect(ok.params["output.heatmap.boundary"]).toBe("city");
+    expect(ok.params["filter.type"]).toBe("urn:heatmap");
+    expect(ok.params["filter.location"]).toMatch(/^POLYGON/);
+  });
+
+  it("drops output.heatmap.boundary, which the hackathon host rejects as city", () => {
+    const result = validateInsightsParams({
+      "filter.type": "urn:heatmap",
+      "filter.location": "POLYGON((-97 37, -80 37, -80 49, -97 49, -97 37))",
+      "signal.interests.entities": "abc",
+      "output.heatmap.boundary": "city",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.dropped).toContain("output.heatmap.boundary");
+    expect(result.params["output.heatmap.boundary"]).toBeUndefined();
   });
 
   it("drops parameters that do not belong to the entity type", () => {
@@ -105,38 +112,34 @@ describe("validateInsightsParams", () => {
 });
 
 describe("allow-lists", () => {
-  it("keeps heatmap output on destination and place, not on artist", () => {
-    expect(allowedParamsFor("urn:entity:destination")).toContain("output.heatmap.boundary");
-    expect(allowedParamsFor("urn:entity:place")).toContain("output.heatmap.boundary");
-    expect(allowedParamsFor("urn:entity:artist")).not.toContain("output.heatmap.boundary");
+  it("keeps WKT location on urn:heatmap and no boundary output anywhere", () => {
+    expect(allowedParamsFor("urn:heatmap")).toContain("filter.location");
+    expect(allowedParamsFor("urn:heatmap")).not.toContain("output.heatmap.boundary");
+    expect(allowedParamsFor("urn:entity:destination")).not.toContain("output.heatmap.boundary");
+    expect(allowedParamsFor("urn:entity:place")).not.toContain("output.heatmap.boundary");
     expect(isInsightType("urn:entity:person")).toBe(true);
     expect(isInsightType("urn:entity:comedian")).toBe(false);
   });
 });
 
 describe("mock client contract", () => {
-  it("returns city-named heatmap cells for an example act", async () => {
+  it("returns unnamed heatmap cells that map onto tour cities", async () => {
     const client = createQlooClient("mock");
-    const search = await client.search({ query: "Marlow & the Night Shifts", take: 1 });
+    const search = await client.search({ query: "MJ Lenderman", take: 1 });
     const entityId = search.results.entities[0]?.entity_id;
     expect(entityId).toBeTruthy();
-    const heat = await client.insights(
-      cityHeatmapParams({
-        entityId: entityId!,
-        locationQuery: "Midwest United States",
-        take: 10,
-      }),
-    );
+    const heat = await client.insights(cityHeatmapParams({ entityId: entityId! }));
     expect("heatmap" in heat.results).toBe(true);
     if ("heatmap" in heat.results) {
       expect(heat.results.heatmap.length).toBeGreaterThan(0);
-      expect(heat.results.heatmap[0]?.location.name).toBeTruthy();
+      expect("name" in heat.results.heatmap[0]!.location).toBe(false);
+      expect(cellsToCities(heat.results.heatmap).length).toBeGreaterThan(5);
     }
   });
 
   it("returns an empty 200 for a city with no fixture coverage", async () => {
     const client = createQlooClient("mock");
-    const search = await client.search({ query: "Marlow & the Night Shifts", take: 1 });
+    const search = await client.search({ query: "MJ Lenderman", take: 1 });
     const empty = await client.insights({
       "filter.type": "urn:entity:place",
       "filter.location.query": "Nome",
@@ -159,9 +162,8 @@ describe("mock client contract", () => {
     const client = createQlooClient("mock");
     await expect(
       client.insights({
-        "filter.type": "urn:entity:destination",
+        "filter.type": "urn:heatmap",
         "signal.interests.entities": "abc",
-        "output.heatmap.boundary": "city",
       }),
     ).rejects.toThrow(/filter\.location/);
   });

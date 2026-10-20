@@ -30,7 +30,7 @@ function fallbackBrief(facts: BriefFacts): PromoBrief {
     })),
     bars: facts.bars.map((name) => ({
       name,
-      why: `Pre-show room within walking or a short ride of ${facts.venue}.`,
+      why: `Bar in ${facts.city} that indexes with this crowd. Distance to the venue not checked.`,
     })),
     brands: facts.brands.map((name) => ({
       name,

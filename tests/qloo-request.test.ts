@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { QLOO_HACKATHON_HOST } from "@/lib/config";
+import { CONUS_WKT } from "@/lib/geo/cities";
 import {
   HACKATHON_INSIGHT_TYPES,
+  PLACE_TAGS,
   buildQlooRequest,
   cityHeatmapParams,
   qlooHeaders,
@@ -29,7 +31,7 @@ describe("Qloo request builder (hackathon guide points 1–4)", () => {
   it("puts the key in X-Api-Key, not Bearer and not the query string", () => {
     const built = buildQlooRequest({
       path: "/search",
-      params: { query: "Marlow" },
+      params: { query: "MJ Lenderman" },
       apiKey: KEY,
     });
     expect(built.headers["X-Api-Key"]).toBe(KEY);
@@ -57,31 +59,35 @@ describe("Qloo request builder (hackathon guide points 1–4)", () => {
     expect(built.url).not.toContain("{");
   });
 
-  it("requests city heatmaps on a supported filter.type, never urn:heatmap", () => {
-    const params = cityHeatmapParams({
-      entityId: "00000000-1111-4000-8000-000000000001",
-      locationQuery: "Midwest United States",
-      take: 20,
-    });
-    expect(params["filter.type"]).toBe("urn:entity:destination");
+  it("requests the fan heatmap as urn:heatmap over a CONUS WKT polygon, no boundary", () => {
+    const params = cityHeatmapParams({ entityId: "00000000-1111-4000-8000-000000000001" });
+    expect(params["filter.type"]).toBe("urn:heatmap");
     expect(HACKATHON_INSIGHT_TYPES).toContain(params["filter.type"]);
-    expect(params["filter.type"]).not.toBe("urn:heatmap");
-    expect(params["output.heatmap.boundary"]).toBe("city");
-    expect(params["filter.location.query"]).toBe("Midwest United States");
+    expect(String(params["filter.location"])).toMatch(/^POLYGON\(\(/);
+    expect(params["filter.location"]).toBe(CONUS_WKT);
+    expect(params["output.heatmap.boundary"]).toBeUndefined();
+    expect(params["filter.location.query"]).toBeUndefined();
     expect(params["signal.interests.entities"]).toBe("00000000-1111-4000-8000-000000000001");
 
     const built = buildQlooRequest({
       path: "/v2/insights",
-      params: {
-        "filter.type": String(params["filter.type"]),
-        "filter.location.query": String(params["filter.location.query"]),
-        "signal.interests.entities": String(params["signal.interests.entities"]),
-        "output.heatmap.boundary": String(params["output.heatmap.boundary"]),
-      },
+      params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
       apiKey: KEY,
     });
-    expect(built.url).toContain("filter.type=urn%3Aentity%3Adestination");
-    expect(built.url).not.toContain("urn%3Aheatmap");
-    expect(built.url).toContain("output.heatmap.boundary=city");
+    const url = new URL(built.url);
+    expect(url.searchParams.get("filter.type")).toBe("urn:heatmap");
+    expect(url.searchParams.get("filter.location")).toBe(CONUS_WKT);
+    expect(built.url).not.toContain("output.heatmap.boundary");
+  });
+
+  it("takes a regional WKT box when given one", () => {
+    const wkt = "POLYGON((-97 37, -80 37, -80 49, -97 49, -97 37))";
+    expect(cityHeatmapParams({ entityId: "x", wkt })["filter.location"]).toBe(wkt);
+  });
+
+  it("pins the venue and bar tags that returned full pages live", () => {
+    expect(PLACE_TAGS.musicVenue).toBe("urn:tag:category:place:live_music_venue");
+    expect(PLACE_TAGS.comedyClub).toBe("urn:tag:genre:place:comedy_club");
+    expect(PLACE_TAGS.bar).toBe("urn:tag:genre:place:restaurant:bar");
   });
 });

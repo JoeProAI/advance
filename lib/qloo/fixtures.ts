@@ -6,31 +6,40 @@ import { EXAMPLE_ACTS } from "@/lib/config";
 import { citiesForNames } from "@/lib/geo/cities";
 import type { ActKind, City } from "@/lib/types";
 
+/**
+ * Tag vocabulary shaped like live Qloo tags (`{id, name, type}`). The ids are
+ * the documented place tags Advance filters on; the records are hand-written.
+ */
 export const SYNTHETIC_TAGS = {
   musicVenue: {
-    id: "urn:tag:genre:place:music_venue",
-    name: "Music Venue",
-    type: "urn:tag:genre:place",
+    id: "urn:tag:category:place:live_music_venue",
+    name: "Live music venue",
+    type: "urn:tag:category:place",
   },
   comedyClub: {
     id: "urn:tag:genre:place:comedy_club",
-    name: "Comedy Club",
+    name: "Comedy club",
     type: "urn:tag:genre:place",
   },
-  nightclub: {
-    id: "urn:tag:genre:place:nightclub",
-    name: "Nightclub",
-    type: "urn:tag:genre:place",
+  nightClub: {
+    id: "urn:tag:category:place:night_club",
+    name: "Night club",
+    type: "urn:tag:category:place",
+  },
+  concertHall: {
+    id: "urn:tag:category:place:concert_hall",
+    name: "Concert hall",
+    type: "urn:tag:category:place",
   },
   bar: {
-    id: "urn:tag:genre:place:bar",
+    id: "urn:tag:genre:place:restaurant:bar",
     name: "Bar",
     type: "urn:tag:genre:place",
   },
-  restaurant: {
-    id: "urn:tag:genre:place:restaurant",
-    name: "Restaurant",
-    type: "urn:tag:genre:place",
+  intimate: {
+    id: "urn:tag:ambience:qloo:intimate",
+    name: "Intimate",
+    type: "urn:tag:ambience:qloo",
   },
 } as const;
 
@@ -47,79 +56,78 @@ export type SyntheticAct = {
   taste: string[];
 };
 
+// Real public act names for the demo tickets. Everything else on these
+// records (ids, popularity, city lists, rooms, openers) is invented for mock
+// mode and does not come from Qloo.
 const EXAMPLES: SyntheticAct[] = [
   {
     entityId: "00000000-1111-4000-8000-000000000001",
     name: EXAMPLE_ACTS[0].name,
     kind: "artist",
-    slug: "marlow",
-    description:
-      "A four-piece from Bloomington that writes night-drive folk-rock. Synthetic mock entity for the desk.",
-    popularity: 0.41,
+    slug: EXAMPLE_ACTS[0].slug,
+    description: "Songwriter with a slacker-country guitar band. Synthetic mock entity for the desk.",
+    popularity: 0.9,
     trendDelta: 0.08,
     cityNames: [
+      "Asheville",
       "Nashville",
-      "Louisville",
-      "St. Louis",
-      "Kansas City",
-      "Minneapolis",
+      "Atlanta",
       "Chicago",
-      "Milwaukee",
-      "Indianapolis",
-      "Cincinnati",
-      "Columbus",
-      "Pittsburgh",
+      "Philadelphia",
+      "Brooklyn",
+      "Boston",
+      "Washington",
+      "Richmond",
+      "Louisville",
     ],
     venueStyle: "rooms",
-    taste: ["late-night radio", "thrift denim", "regional beer", "story songs"],
+    taste: ["Unpretentious", "Gritty", "Classic", "Dive bar vibe"],
   },
   {
     entityId: "00000000-1111-4000-8000-000000000002",
     name: EXAMPLE_ACTS[1].name,
     kind: "person",
-    slug: "rina",
-    description:
-      "Observational comic who works clean-enough rooms and college towns. Synthetic mock entity for the desk.",
-    popularity: 0.36,
+    slug: EXAMPLE_ACTS[1].slug,
+    description: "Stand-up who works club weekends and theater one-nighters. Synthetic mock entity for the desk.",
+    popularity: 0.88,
     trendDelta: 0.14,
     cityNames: [
       "Boston",
       "New York",
       "Philadelphia",
-      "Baltimore",
       "Washington",
-      "Richmond",
+      "Baltimore",
       "Pittsburgh",
       "Cleveland",
       "Chicago",
+      "Denver",
       "Austin",
     ],
     venueStyle: "clubs",
-    taste: ["true-crime pods", "natural wine", "standup nights", "city weeklies"],
+    taste: ["Edgy", "Classic", "Fun", "Energetic"],
   },
   {
     entityId: "00000000-1111-4000-8000-000000000003",
     name: EXAMPLE_ACTS[2].name,
     kind: "artist",
-    slug: "kite",
-    description:
-      "Hardware techno DJ booked on warehouse floors and leftover industrial rooms. Synthetic mock entity for the desk.",
-    popularity: 0.33,
+    slug: EXAMPLE_ACTS[2].slug,
+    description: "Loud guitar band with a pedal-steel streak. Synthetic mock entity for the desk.",
+    popularity: 0.89,
     trendDelta: 0.21,
     cityNames: [
-      "Detroit",
-      "Chicago",
-      "Milwaukee",
-      "Cleveland",
+      "Asheville",
+      "Atlanta",
+      "Nashville",
+      "Louisville",
+      "Cincinnati",
+      "Columbus",
       "Pittsburgh",
       "Philadelphia",
       "Brooklyn",
-      "Baltimore",
-      "Cincinnati",
-      "Columbus",
+      "Richmond",
     ],
-    venueStyle: "warehouses",
-    taste: ["all-night radio", "black coffee", "modular synths", "workwear"],
+    venueStyle: "rooms",
+    taste: ["Gritty", "Grungy", "Eclectic", "Unique"],
   },
 ];
 
@@ -366,12 +374,16 @@ const COMIC_OPENERS = [
   "Pell & March",
 ];
 
-const KIND_TAG: Record<PlaceKind, { id: string; name: string; type: string }> = {
+export const KIND_TAG: Record<PlaceKind, { id: string; name: string; type: string }> = {
   room: SYNTHETIC_TAGS.musicVenue,
-  theater: SYNTHETIC_TAGS.musicVenue,
+  theater: SYNTHETIC_TAGS.concertHall,
   club: SYNTHETIC_TAGS.comedyClub,
-  warehouse: SYNTHETIC_TAGS.nightclub,
+  warehouse: SYNTHETIC_TAGS.nightClub,
 };
+
+export function nickForCity(city: string): string {
+  return nickFor(city);
+}
 
 function nickFor(city: string): string {
   return CITY_NICK[city] ?? city.split(" ")[0] ?? city;
@@ -466,7 +478,7 @@ export function venueWhyLine(input: {
   capacity: number;
   tags: string[];
 }): string {
-  const genericTags = new Set(["Music Venue", "Comedy Club", "Nightclub", "Bar", "Restaurant"]);
+  const genericTags = new Set(["Live music venue", "Comedy club", "Night club", "Concert hall", "Bar", "Restaurant"]);
   const taste = input.tags.find((tag) => !genericTags.has(tag)) ?? input.tags[0];
   return [input.city, input.kind, `${input.capacity} cap`, `aff ${input.affinity.toFixed(2)}`, taste]
     .filter(Boolean)

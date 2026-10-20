@@ -1,10 +1,11 @@
 import { QLOO_HACKATHON_HOST } from "@/lib/config";
-import { INSIGHT_TYPES, type InsightType, type QlooInsightsParams } from "@/lib/qloo/types";
+import { CONUS_WKT } from "@/lib/geo/cities";
+import { HEATMAP_TYPE, INSIGHT_TYPES, type InsightType, type QlooInsightsParams } from "@/lib/qloo/types";
 
 /**
- * Hackathon Insights `filter.type` is the ten-entity list only.
- * `urn:heatmap` is not on that list and will 403 or return an empty 200.
- * See the Oct 7 developer guide and
+ * Hackathon Insights `filter.type` values: the ten entity types from the
+ * developer guide plus `urn:heatmap`, which the hackathon host serves
+ * (verified live Oct 20, 2026).
  * https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide
  */
 export const HACKATHON_INSIGHT_TYPES = INSIGHT_TYPES;
@@ -66,26 +67,31 @@ export function buildQlooRequest(input: {
 }
 
 /**
- * City heatmaps are not `filter.type=urn:heatmap`.
- * Request a supported type that accepts a location, then set
- * `output.heatmap.boundary` (city | neighborhood | geohash).
- * Documented on https://docs.qloo.com/reference/insights-api-deep-dive
- * (`output.heatmap.boundary`). Hackathon-supported types:
- * https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide
+ * Fan heatmap for one act: `filter.type=urn:heatmap` over a WKT polygon.
+ * Live behavior (Oct 20, 2026): returns unnamed geohash-4 cells with
+ * affinity, affinity_rank, and popularity. Do not send
+ * `output.heatmap.boundary=city`; Qloo answers 400. Cells are mapped to
+ * cities client side (see `cellsToCities`).
+ * Heatmap reference: https://docs.qloo.com/reference/insights-api-deep-dive
  */
-export function cityHeatmapParams(input: {
-  entityId: string;
-  locationQuery: string;
-  take?: number;
-}): QlooInsightsParams {
+export function cityHeatmapParams(input: { entityId: string; wkt?: string }): QlooInsightsParams {
   return {
-    "filter.type": "urn:entity:destination",
-    "filter.location.query": input.locationQuery,
+    "filter.type": HEATMAP_TYPE,
+    "filter.location": input.wkt ?? CONUS_WKT,
     "signal.interests.entities": input.entityId,
-    "output.heatmap.boundary": "city",
-    take: input.take ?? 20,
   };
 }
+
+/**
+ * Fixed place tags, checked live on the hackathon host. The tag search
+ * auto-pick (`urn:tag:setting:qloo:music_venue`) returned only 3 Chicago
+ * rooms; the category tag returns full pages in every city probed.
+ */
+export const PLACE_TAGS = {
+  musicVenue: "urn:tag:category:place:live_music_venue",
+  comedyClub: "urn:tag:genre:place:comedy_club",
+  bar: "urn:tag:genre:place:restaurant:bar",
+} as const;
 
 export function isTagIdList(value: string): boolean {
   return value

@@ -45,11 +45,8 @@ const LOCATION = [
   "signal.location.radius",
 ] as const;
 
-const HEATMAP_OUTPUT = ["output.heatmap.boundary"] as const;
-
 const PLACE_ONLY = [
   ...LOCATION,
-  ...HEATMAP_OUTPUT,
   "filter.address",
   "filter.geocode.name",
   "filter.geocode.admin1_region",
@@ -108,7 +105,6 @@ const ALLOW_BY_TYPE: Record<InsightType, readonly string[]> = {
     "filter.geocode.admin2_region",
     "filter.geocode.country_code",
     ...LOCATION,
-    ...HEATMAP_OUTPUT,
   ],
   "urn:entity:book": [...COMMON, "filter.publication_year.min", "filter.publication_year.max"],
   "urn:entity:movie": [...COMMON, ...MEDIA_YEAR],
@@ -121,6 +117,19 @@ const ALLOW_BY_TYPE: Record<InsightType, readonly string[]> = {
     "filter.latest_known_year.min",
   ],
   "urn:entity:video_game": [...COMMON],
+  // Heatmap mode: area (WKT or query) plus signals. No boundary output; the
+  // hackathon host rejects `output.heatmap.boundary=city` with a 400.
+  "urn:heatmap": [
+    "filter.type",
+    "filter.location",
+    "filter.location.query",
+    "signal.interests.entities",
+    "signal.interests.tags",
+    "signal.demographics.age",
+    "signal.demographics.gender",
+    "signal.demographics.audiences",
+    "filter.tags",
+  ],
 };
 
 export type ValidationResult = {
@@ -201,14 +210,14 @@ export function validateInsightsParams(input: QlooInsightsParams): ValidationRes
     params[key] = stringify(raw);
   }
 
-  if (params["output.heatmap.boundary"]) {
+  if (type === "urn:heatmap") {
     const hasLocation = Boolean(params["filter.location"] || params["filter.location.query"]);
     if (!hasLocation) {
-      errors.push("Heatmap output requires filter.location or filter.location.query");
+      errors.push("Heatmap requires filter.location (WKT) or filter.location.query");
     }
     const hasSignal = Object.keys(params).some((key) => key.startsWith("signal."));
     if (!hasSignal) {
-      errors.push("Heatmap output requires at least one signal.* parameter");
+      errors.push("Heatmap requires at least one signal.* parameter");
     }
   }
 

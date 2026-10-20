@@ -4,21 +4,21 @@ import type { PlanRequest } from "../lib/types";
 async function main(): Promise<void> {
   const acts: PlanRequest[] = [
     {
-      actName: "Marlow & the Night Shifts",
+      actName: "MJ Lenderman",
       kindHint: "artist",
       showCount: 8,
       maxDriveHours: 5,
       budgetTier: "either",
     },
     {
-      actName: "Rina Voss",
+      actName: "Sam Morril",
       kindHint: "person",
       showCount: 8,
       maxDriveHours: 5,
       budgetTier: "rooms",
     },
     {
-      actName: "KITE/440",
+      actName: "Wednesday",
       kindHint: "artist",
       showCount: 8,
       maxDriveHours: 5,

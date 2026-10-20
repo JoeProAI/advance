@@ -95,8 +95,12 @@ export function createQlooClient(explicit?: QlooMode): QlooClient {
       return mode === "live" ? liveCompare(a, b) : mockCompare(a, b);
     },
     async trends(entityId) {
+      if (mode === "live") {
+        // No network call: the hackathon host does not serve trends.
+        return liveTrends(entityId);
+      }
       budget();
-      return mode === "live" ? liveTrends(entityId) : mockTrends(entityId);
+      return mockTrends(entityId);
     },
   };
 }

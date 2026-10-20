@@ -25,20 +25,20 @@ We do not spawn `qloo exec` or `qloo mcp` from the web app. A Vercel or serverle
 | `rank` | Yes | Affinity minus drive cost, nearest-neighbor + 2-opt |
 | `compare_audiences` | Yes | Headliner vs opener overlap via `/v2/insights/compare` |
 | `entity_tags` | Yes | Shared taste tags for promo briefs |
-| `trends` | Yes | Optional week-over-week via `/trends/entity` |
+| `trends` | No (live) | `/trends/entity` answers 404 on the hackathon host, so live mode skips it and hides momentum. Mock mode still shows a synthetic figure. |
 | `audience_demographics` | No | Geography and affinity are enough; demographic inference is out of scope |
 
 Mapping source: [`lib/qloo/workflows.ts`](lib/qloo/workflows.ts). The desk radio prints the matching `qloo_*` label next to each REST path.
 
 ## 3. Request to result (redacted)
 
-Example: Marlow & the Night Shifts, 8 shows, 5h drive cap, first Friday about eight weeks out.
+Example: MJ Lenderman, 8 shows, 5h drive cap, first Friday about eight weeks out.
 
-1. `GET /search?query=Marlow%20%26%20the%20Night%20Shifts&types=urn:entity:artist,urn:entity:person` then `GET /entities` → entity id (mock uses a synthetic UUID).
-2. `GET /v2/insights?filter.type=urn:entity:destination&signal.interests.entities=<id>&filter.location.query=<region>&output.heatmap.boundary=city` over a handful of US regions → named cities with affinity. `urn:heatmap` is not a hackathon `filter.type`.
+1. `GET /search?query=MJ%20Lenderman&types=urn:entity:artist,urn:entity:person` then `GET /entities` → entity id (mock uses a synthetic UUID). Search always returns its closest hits, so Advance only routes an exact name match and otherwise answers "Did you mean".
+2. `GET /v2/insights?filter.type=urn:heatmap&filter.location=POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))&signal.interests.entities=<id>` → one national grid of unnamed geohash cells. Each cell snaps to the nearest tour city within 40 miles; a city scores its best cell's affinity × popularity. One call keeps every city on the same scale. (`output.heatmap.boundary=city` answers 400 on the hackathon host, and free-text regions resolve unpredictably, so neither is used.)
 3. Local rank under the drive cap → ordered stops (Pittsburgh → …).
-4. `GET /v2/tags?filter.query=music%20venue` → tag id, then place insights in each city with that tag and the act as signal.
-5. Artist insights + `/v2/insights/compare` → opener shortlist with overlap.
+4. Place insights in each city with a fixed tag (`urn:tag:category:place:live_music_venue` or `urn:tag:genre:place:comedy_club`) and the act as signal. Qloo has no capacity field, so room size comes only from Qloo tags (Intimate, Cozy, Concert hall, Performing arts theater) and reads "Size unknown" otherwise.
+5. Artist or person insights capped at the headliner's popularity + `/v2/insights/compare` → opener shortlist. Overlap is the mean of the top five shared tag scores (compare returns no single overlap number).
 6. Tag / podcast / place / brand insights → promo brief. Routing is ours, not Qloo.
 
 No user name, email, device id, or account id is sent. Inputs are a public act name and optional start city. `.env.example` keeps `QLOO_API_KEY` empty. Live responses are cached only on the server (`.data/`, gitignored).
@@ -127,7 +127,7 @@ Never commit keys. `.env*` is gitignored except `.env.example`. `QLOO_API_KEY` i
 | Writing | Deterministic briefs if no OpenRouter key | OpenRouter if `OPENROUTER_API_KEY` is set |
 | Share links | File store under `.data/plans` | Same, or Convex once configured |
 
-The three example acts (Marlow & the Night Shifts, Rina Voss, KITE/440) are invented for the demo. Because the repository will be public, every mock fixture is hand-written in the repo. Do not paste live Qloo JSON into `lib/qloo/fixtures.ts` or anywhere else that is committed. Live responses are cached only under `.data/` (gitignored) on the server.
+The three example tickets name real public acts (MJ Lenderman, Sam Morril, Wednesday) so live mode resolves them through Qloo search. In mock mode their ids, cities, rooms, and openers are invented. Because the repository will be public, every mock fixture is hand-written in the repo. Do not paste live Qloo JSON into `lib/qloo/fixtures.ts` or anywhere else that is committed. Live responses are cached only under `.data/` (gitignored) on the server.
 
 Invalid Qloo parameters fail silently with empty results. Every insights call is checked against a per-`filter.type` allow-list in [`lib/qloo/validate.ts`](lib/qloo/validate.ts) before it is sent.
 

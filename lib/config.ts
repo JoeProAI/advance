@@ -16,30 +16,34 @@ export const DEFAULT_CRUISE_MPH = 50;
 
 export const PLAN_RATE_LIMIT_PER_HOUR = 5;
 
+/**
+ * Demo tickets: real public acts, resolved live through Qloo search.
+ * Mock mode pairs these names with invented ids, rooms, and openers.
+ */
 export const EXAMPLE_ACTS = [
   {
-    slug: "marlow",
-    name: "Marlow & the Night Shifts",
+    slug: "lenderman",
+    name: "MJ Lenderman",
     kind: "artist" as const,
-    role: "Indie band",
-    blurb: "Midwest rooms, late drives, crowds that already know the choruses.",
-    stamp: "BAND",
+    role: "Indie rock songwriter",
+    blurb: "Asheville songwriter. Small rooms where the crowd already knows the words.",
+    stamp: "SOLO",
   },
   {
-    slug: "rina",
-    name: "Rina Voss",
+    slug: "morril",
+    name: "Sam Morril",
     kind: "person" as const,
     role: "Touring comedian",
-    blurb: "Clubs that book tight sets. Cities that stay out after.",
+    blurb: "Club weekends and theater one-nighters. Cities that stay out after.",
     stamp: "COMIC",
   },
   {
-    slug: "kite",
-    name: "KITE/440",
+    slug: "wednesday",
+    name: "Wednesday",
     kind: "artist" as const,
-    role: "DJ",
-    blurb: "Warehouse nights and industrial towns that still dance on a Tuesday.",
-    stamp: "DJ",
+    role: "Indie rock band",
+    blurb: "Asheville band. Loud rooms and long drives through the South.",
+    stamp: "BAND",
   },
 ] as const;
 

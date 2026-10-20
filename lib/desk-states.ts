@@ -49,14 +49,14 @@ export const DESK_FAILURES: Record<Exclude<DeskState, "loading" | "partial">, De
     stamp: "VOID",
     title: "Qloo returned a dead line.",
     body: "The taste radio failed before cities landed. Wrong key (401) or an unsupported entity type (403) are the usual causes. Nothing on this sheet was invented to fill the gap. Try the run again, or stay in mock mode.",
-    recovery: { href: "/run?example=marlow", label: "Stamp Marlow again" },
+    recovery: { href: "/run?example=lenderman", label: "Stamp MJ Lenderman again" },
   },
   "qloo-timeout": {
     state: "qloo-timeout",
     stamp: "HOLD",
     title: "Qloo timed out on the heatmap.",
     body: "The desk waited, then closed the window. Heatmaps never arrived. Wait a minute and send the same act through once more.",
-    recovery: { href: "/run?example=rina", label: "Stamp Rina again" },
+    recovery: { href: "/run?example=morril", label: "Stamp Sam Morril again" },
   },
   "no-heatmap": {
     state: "no-heatmap",
@@ -84,7 +84,7 @@ export const DESK_FAILURES: Record<Exclude<DeskState, "loading" | "partial">, De
     stamp: "HOLD",
     title: "The writer went quiet.",
     body: "OpenRouter did not finish the briefs. The route and rooms still stand. Retry the writer, or read the desk-copy briefs already filed.",
-    recovery: { href: "/run?example=kite", label: "File the run on desk copy" },
+    recovery: { href: "/run?example=wednesday", label: "File the run on desk copy" },
   },
   "not-found": {
     state: "not-found",
@@ -108,6 +108,9 @@ export function deskCopyForPlanError(error: unknown): DeskFailureCopy | null {
   }
   if (message.includes("heatmap came back empty") || message.includes("No city-level cells")) {
     return DESK_FAILURES["no-heatmap"];
+  }
+  if (message.includes("Did you mean") || message.startsWith("No Qloo entity")) {
+    return { ...DESK_FAILURES["act-not-found"], body: message };
   }
   return null;
 }

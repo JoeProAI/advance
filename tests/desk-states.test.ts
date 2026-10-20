@@ -69,7 +69,7 @@ describe("desk preview state flags", () => {
   it("rejects an invalid start date", () => {
     expect(() =>
       parsePlanRequest({
-        actName: "Marlow & the Night Shifts",
+        actName: "MJ Lenderman",
         startDate: "friday-ish",
       }),
     ).toThrow(/calendar day/);

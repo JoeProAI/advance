@@ -39,9 +39,18 @@ export const US_CITIES: City[] = [
   { name: "Omaha", region: "NE", country: "US", lat: 41.2565, lon: -95.9345 },
 ];
 
-const REGIONS: Record<string, { query: string; cities: string[] }> = {
+/**
+ * One WKT box over the lower 48. Qloo heatmap affinity is normalized inside
+ * the queried area, so one national call keeps every city on the same scale
+ * (separate regional calls are not comparable). Qloo resolves free-text
+ * region names unpredictably ("Midwest United States" lands on Midwest City,
+ * OK), so Advance never sends them.
+ */
+export const CONUS_WKT = "POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))";
+
+const REGIONS: Record<string, { wkt: string; cities: string[] }> = {
   northeast: {
-    query: "Northeastern United States",
+    wkt: "POLYGON((-81 36.5, -66.5 36.5, -66.5 47.5, -81 47.5, -81 36.5))",
     cities: [
       "New York",
       "Brooklyn",
@@ -54,7 +63,7 @@ const REGIONS: Record<string, { query: string; cities: string[] }> = {
     ],
   },
   midwest: {
-    query: "Midwest United States",
+    wkt: "POLYGON((-97.5 36.5, -80.5 36.5, -80.5 49.5, -97.5 49.5, -97.5 36.5))",
     cities: [
       "Chicago",
       "Detroit",
@@ -68,7 +77,7 @@ const REGIONS: Record<string, { query: string; cities: string[] }> = {
     ],
   },
   south: {
-    query: "Southern United States",
+    wkt: "POLYGON((-106.5 24.5, -75.5 24.5, -75.5 37, -106.5 37, -106.5 24.5))",
     cities: [
       "Nashville",
       "Louisville",
@@ -81,11 +90,11 @@ const REGIONS: Record<string, { query: string; cities: string[] }> = {
     ],
   },
   plains: {
-    query: "Central United States",
+    wkt: "POLYGON((-106 36, -89.5 36, -89.5 43.5, -106 43.5, -106 36))",
     cities: ["St. Louis", "Kansas City", "Omaha", "Denver"],
   },
   west: {
-    query: "Western United States",
+    wkt: "POLYGON((-125 31, -102 31, -102 49.5, -125 49.5, -125 31))",
     cities: [
       "Denver",
       "Salt Lake City",

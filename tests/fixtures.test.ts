@@ -88,13 +88,13 @@ describe("synthetic venues and openers", () => {
 
 describe("parsePlanRequest start date", () => {
   it("fills the eight-week default when the field is blank", () => {
-    const request = parsePlanRequest({ actName: "Marlow & the Night Shifts" });
+    const request = parsePlanRequest({ actName: "MJ Lenderman" });
     expect(request.startDate).toBe(defaultTourStartDate());
   });
 
   it("keeps an explicit date", () => {
     const request = parsePlanRequest({
-      actName: "Rina Voss",
+      actName: "Sam Morril",
       startDate: "2027-02-12",
     });
     expect(request.startDate).toBe("2027-02-12");

@@ -11,6 +11,7 @@ import type {
   QlooTrendsResponse,
 } from "@/lib/qloo/types";
 import { validateInsightsParams } from "@/lib/qloo/validate";
+import { overlapFromCompare, parseEntityList, parseHeatmapCells, parseTags } from "@/lib/qloo/parse";
 import { getPlanStore } from "@/lib/storage";
 
 function assertServer(): void {
@@ -47,6 +48,7 @@ async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
     method: built.method,
     headers: built.headers,
     cache: "no-store",
+    signal: AbortSignal.timeout(25_000),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -64,23 +66,29 @@ export async function liveSearch(params: QlooSearchParams): Promise<QlooEntities
     search.set("types", params.types);
   }
   search.set("take", String(Math.min(params.take ?? 5, QLOO_TAKE_CAP)));
-  return qlooFetch<QlooEntitiesResponse>("/search", search);
+  // Live /search returns `results` as a plain array.
+  return parseEntityList(await qlooFetch<unknown>("/search", search));
 }
 
 export async function liveEntities(entityIds: string[]): Promise<QlooEntitiesResponse> {
   const search = new URLSearchParams();
   search.set("entity_ids", entityIds.join(","));
-  return qlooFetch<QlooEntitiesResponse>("/entities", search);
+  // Live /entities returns `results` as a plain array.
+  return parseEntityList(await qlooFetch<unknown>("/entities", search));
 }
 
 export async function liveInsights(
-  raw: QlooInsightsParams,
+  input: QlooInsightsParams,
 ): Promise<QlooEntitiesResponse | QlooHeatmapResponse> {
-  const validated = validateInsightsParams(raw);
+  const validated = validateInsightsParams(input);
   if (!validated.ok) {
     throw new Error(`Refusing Qloo insights call: ${validated.errors.join("; ")}`);
   }
-  return qlooFetch("/v2/insights", toSearchParams(validated.params));
+  const raw = await qlooFetch<unknown>("/v2/insights", toSearchParams(validated.params));
+  if (validated.params["filter.type"] === "urn:heatmap") {
+    return { success: true, results: { heatmap: parseHeatmapCells(raw) } };
+  }
+  return parseEntityList(raw);
 }
 
 export async function liveTags(query: string): Promise<QlooTagsResponse> {
@@ -89,7 +97,8 @@ export async function liveTags(query: string): Promise<QlooTagsResponse> {
     search.set("filter.query", query);
   }
   search.set("take", "20");
-  return qlooFetch<QlooTagsResponse>("/v2/tags", search);
+  const raw = await qlooFetch<unknown>("/v2/tags", search);
+  return { success: true, results: { tags: parseTags(raw) } };
 }
 
 export async function liveCompare(a: string[], b: string[]): Promise<QlooCompareResponse> {
@@ -97,7 +106,8 @@ export async function liveCompare(a: string[], b: string[]): Promise<QlooCompare
   search.set("a.signal.interests.entities", a.join(","));
   search.set("b.signal.interests.entities", b.join(","));
   try {
-    return await qlooFetch<QlooCompareResponse>("/v2/insights/compare", search);
+    const raw = await qlooFetch<unknown>("/v2/insights/compare", search);
+    return { success: true, results: overlapFromCompare(raw) };
   } catch (error) {
     if (isAuthOrTypeError(error)) {
       throw error;
@@ -113,36 +123,19 @@ export async function liveCompare(a: string[], b: string[]): Promise<QlooCompare
   }
 }
 
+/**
+ * Trends are not served on the hackathon host: `/trends/entity` and
+ * `/trends/category` answered 404 and `/v2/trending` returned an empty list
+ * (Oct 20, 2026). Live mode reports trends as unavailable without spending a
+ * call, and the agent hides momentum.
+ */
 export async function liveTrends(entityId: string): Promise<QlooTrendsResponse> {
-  const search = new URLSearchParams();
-  search.set("entity_id", entityId);
-  try {
-    const raw = await qlooFetch<Record<string, unknown>>("/trends/entity", search);
-    const delta =
-      typeof raw.delta === "number"
-        ? raw.delta
-        : typeof (raw.results as { delta?: number } | undefined)?.delta === "number"
-          ? (raw.results as { delta: number }).delta
-          : undefined;
-    return {
-      success: true,
-      results: {
-        available: true,
-        delta,
-        window: "wow",
-        note: "Week-over-week from /trends/entity",
-      },
-    };
-  } catch (error) {
-    if (isAuthOrTypeError(error)) {
-      throw error;
-    }
-    return {
-      success: false,
-      results: {
-        available: false,
-        note: error instanceof Error ? error.message : "trends failed",
-      },
-    };
-  }
+  void entityId;
+  return {
+    success: false,
+    results: {
+      available: false,
+      note: "Trends are not available on the Qloo hackathon host.",
+    },
+  };
 }

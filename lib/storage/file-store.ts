@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { AgentStep, TourPlan } from "@/lib/types";
 import type { PlanStore } from "@/lib/storage/types";
 
@@ -20,8 +21,11 @@ function planPath(id: string): string {
 }
 
 function cachePath(key: string): string {
-  const safe = key.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 180);
-  return path.join(CACHE, `${safe}.json`);
+  // Hash the full key. Truncating long insight URLs let two different
+  // requests (same prefix, different act or take) share one cache file.
+  const prefix = key.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
+  const digest = createHash("sha256").update(key).digest("hex").slice(0, 24);
+  return path.join(CACHE, `${prefix}-${digest}.json`);
 }
 
 export function createFileStore(): PlanStore {

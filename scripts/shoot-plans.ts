@@ -34,8 +34,9 @@ async function saveExample(example: string) {
 }
 
 async function main() {
-  await saveExample("marlow");
-  await saveExample("rina");
+  await saveExample("lenderman");
+  await saveExample("wednesday");
+  await saveExample("morril");
 }
 
 void main();
