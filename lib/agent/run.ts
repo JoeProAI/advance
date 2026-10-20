@@ -1,15 +1,17 @@
-import { findCity } from "@/lib/geo/cities";
+import { cityKey, findCity } from "@/lib/geo/cities";
 import { pickByTier, roomSize } from "@/lib/agent/rooms";
 import { createQlooClient, isHeatmapResponse } from "@/lib/qloo/client";
 import { isAuthOrTypeError } from "@/lib/qloo/errors";
 import {
   cellsToCities,
+  dedupeMarkets,
   entityDescription,
   entityKind,
   entityPopularity,
   entityTags,
   explainScore,
   matchSearchHit,
+  withinMiles,
 } from "@/lib/qloo/parse";
 import { PLACE_TAGS, cityHeatmapParams } from "@/lib/qloo/request";
 import { harnessLabel } from "@/lib/qloo/workflows";
@@ -19,6 +21,7 @@ import { createId } from "@/lib/utils";
 import { resolveWriter, writeBrief, writeSummary } from "@/lib/agent/write";
 import type {
   AgentStep,
+  City,
   OpenerPick,
   PlanRequest,
   PromoBrief,
@@ -54,18 +57,21 @@ function asNumber(value: number | undefined, fallback: number): number {
 }
 
 type Client = ReturnType<typeof createQlooClient>;
+
+const VENUE_RADIUS_MILES = 30;
 type Emit = (next: AgentStep) => Promise<void>;
 
 const GENERIC_AMBIENCE = new Set(["Casual", "Social", "Lively", "Place", "Tourist attraction"]);
-const VENUE_CATEGORIES = [
-  "Comedy club",
+const MUSIC_CATEGORIES = [
+  "Live music venue",
+  "Live music bar",
   "Concert hall",
   "Performing arts theater",
-  "Live music bar",
-  "Live music venue",
   "Night club",
   "Event venue",
+  "Comedy club",
 ];
+const COMEDY_CATEGORIES = ["Comedy club", "Performing arts theater", "Concert hall", "Event venue", "Live music venue"];
 
 function explain(entity: QlooEntity, act: ResolvedAct, cityName: string): string {
   const parts: string[] = [cityName];
@@ -75,7 +81,7 @@ function explain(entity: QlooEntity, act: ResolvedAct, cityName: string): string
   }
   const tags = entityTags(entity);
   const names = new Set(tags.map((tag) => tag.name));
-  const category = VENUE_CATEGORIES.find((name) => names.has(name));
+  const category = (act.kind === "person" ? COMEDY_CATEGORIES : MUSIC_CATEGORIES).find((name) => names.has(name));
   if (category) {
     parts.push(category.toLowerCase());
   }
@@ -89,8 +95,10 @@ function explain(entity: QlooEntity, act: ResolvedAct, cityName: string): string
   if (taste) {
     parts.push(taste.name);
   }
+  // With one signal Qloo explains every pick at 1.00, which says nothing.
+  // Only print the score when it actually discriminates.
   const score = explainScore(entity, act.entityId);
-  if (typeof score === "number") {
+  if (typeof score === "number" && score < 0.999) {
     parts.push(`explained by ${act.name} ${score.toFixed(2)}`);
   }
   if (parts.length <= 1) {
@@ -112,17 +120,21 @@ function holdVenue(cityName: string, why: string): VenuePick {
   };
 }
 
-async function pickVenue(client: Client, act: ResolvedAct, cityName: string, request: PlanRequest): Promise<VenuePick> {
+async function pickVenue(client: Client, act: ResolvedAct, city: City, request: PlanRequest): Promise<VenuePick> {
+  const cityName = city.name;
   const tagId = act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue;
   const raw = await client.insights({
     "filter.type": "urn:entity:place",
     "filter.tags": tagId,
-    "filter.location.query": cityName,
+    "filter.location.query": cityKey(city),
     "signal.interests.entities": act.entityId,
     "feature.explainability": true,
     take: 8,
   });
-  const entities = isHeatmapResponse(raw) ? [] : raw.results.entities;
+  // Location queries are fuzzy; drop rooms that sit outside the market.
+  const entities = (isHeatmapResponse(raw) ? [] : raw.results.entities).filter((entity) =>
+    withinMiles(entity, city, VENUE_RADIUS_MILES),
+  );
   const entity = pickByTier(entities, request.budgetTier);
   if (!entity) {
     return holdVenue(cityName, "Qloo returned no venue-tagged places for this city.");
@@ -143,6 +155,7 @@ async function pickOpeners(
   client: Client,
   act: ResolvedAct,
   cityName: string,
+  locationQuery: string,
   used: Set<string>,
 ): Promise<OpenerPick[]> {
   const type = act.kind === "person" ? "urn:entity:person" : "urn:entity:artist";
@@ -153,7 +166,7 @@ async function pickOpeners(
   const raw = await client.insights({
     "filter.type": type,
     "signal.interests.entities": act.entityId,
-    "signal.location.query": cityName,
+    "signal.location.query": locationQuery,
     "filter.exclude.entities": act.entityId,
     "filter.popularity.max": Number(cap.toFixed(3)),
     take: 8,
@@ -161,8 +174,14 @@ async function pickOpeners(
   if (isHeatmapResponse(raw)) {
     return [];
   }
-  const fresh = raw.results.entities.filter((entity) => entity.entity_id !== act.entityId && !used.has(entity.entity_id));
-  const entities = (fresh.length >= 2 ? fresh : raw.results.entities.filter((e) => e.entity_id !== act.entityId)).slice(0, 2);
+  // Prefer names not already booked on an earlier stop. Qloo's location
+  // weighting is light, so neighboring cities often return the same names;
+  // fill with a repeat only when nothing new came back.
+  const others = raw.results.entities.filter((entity) => entity.entity_id !== act.entityId);
+  const entities = [
+    ...others.filter((entity) => !used.has(entity.entity_id)),
+    ...others.filter((entity) => used.has(entity.entity_id)),
+  ].slice(0, 2);
   const compared = await Promise.all(
     entities.map((entity) => client.compare([act.entityId], [entity.entity_id])),
   );
@@ -188,7 +207,7 @@ async function pickOpeners(
 async function promoFacts(
   client: Client,
   act: ResolvedAct,
-  cityName: string,
+  locationQuery: string,
   sharedTags: string[],
 ): Promise<{ podcasts: string[]; bars: string[]; brands: string[]; tags: string[] }> {
   const names = (raw: Awaited<ReturnType<Client["insights"]>>) =>
@@ -206,7 +225,7 @@ async function promoFacts(
       client.insights({
         "filter.type": "urn:entity:podcast",
         "signal.interests.entities": act.entityId,
-        "signal.location.query": cityName,
+        "signal.location.query": locationQuery,
         take: 4,
       }),
     ),
@@ -214,7 +233,7 @@ async function promoFacts(
       client.insights({
         "filter.type": "urn:entity:place",
         "filter.tags": PLACE_TAGS.bar,
-        "filter.location.query": cityName,
+        "filter.location.query": locationQuery,
         "signal.interests.entities": act.entityId,
         take: 4,
       }),
@@ -223,7 +242,7 @@ async function promoFacts(
       client.insights({
         "filter.type": "urn:entity:brand",
         "signal.interests.entities": act.entityId,
-        "signal.location.query": cityName,
+        "signal.location.query": locationQuery,
         take: 4,
       }),
     ),
@@ -340,7 +359,8 @@ export async function runTourAgent(
     ),
   );
   const heat = await softly(emit, "Heatmap", null, () => client.insights(cityHeatmapParams({ entityId: act.entityId })));
-  const candidates = heat.value && isHeatmapResponse(heat.value) ? cellsToCities(heat.value.results.heatmap) : [];
+  const candidates =
+    heat.value && isHeatmapResponse(heat.value) ? dedupeMarkets(cellsToCities(heat.value.results.heatmap)) : [];
   if (candidates.length === 0) {
     await emit(
       step("Heatmap empty", "No city-level cells. The sheet stays blank.", undefined, "error"),
@@ -392,6 +412,9 @@ export async function runTourAgent(
   let thin = candidates.length < request.showCount;
   for (let i = 0; i < routed.cities.length; i += 1) {
     const city = routed.cities[i]!;
+    // "Washington" alone resolved outside DC and "Richmond" can land in
+    // California, so every location query carries the state.
+    const where = cityKey(city);
     await emit(
       step(
         `Scoring venues in ${city.name}`,
@@ -401,7 +424,7 @@ export async function runTourAgent(
     );
     const venue = (
       await softly(emit, `Venues in ${city.name}`, holdVenue(city.name, "Qloo venue call failed for this city."), () =>
-        pickVenue(client, act, city.name, request),
+        pickVenue(client, act, city, request),
       )
     ).value;
     if (venue.entityId === "thin") {
@@ -415,7 +438,7 @@ export async function runTourAgent(
       ),
     );
     const openersRun = await softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
-      pickOpeners(client, act, city.name, usedOpeners),
+      pickOpeners(client, act, city.name, where, usedOpeners),
     );
     const openers = openersRun.value;
     if (openersRun.failed || openers.length === 0) {
@@ -433,7 +456,7 @@ export async function runTourAgent(
         emit,
         `Promo for ${city.name}`,
         { podcasts: [], bars: [], brands: [], tags: sharedTags },
-        () => promoFacts(client, act, city.name, sharedTags),
+        () => promoFacts(client, act, where, sharedTags),
       )
     ).value;
     const brief: PromoBrief = await writeBrief({

@@ -29,6 +29,21 @@ function apiKey(): string {
   return key;
 }
 
+const RETRY_WAITS_MS = [800, 2000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function send(built: ReturnType<typeof buildQlooRequest>): Promise<Response> {
+  return fetch(built.url, {
+    method: built.method,
+    headers: built.headers,
+    cache: "no-store",
+    signal: AbortSignal.timeout(25_000),
+  });
+}
+
 async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
   assertServer();
   const built = buildQlooRequest({
@@ -44,12 +59,16 @@ async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
     return cached as T;
   }
 
-  const response = await fetch(built.url, {
-    method: built.method,
-    headers: built.headers,
-    cache: "no-store",
-    signal: AbortSignal.timeout(25_000),
-  });
+  let response = await send(built);
+  // The hackathon host rate-limits bursts (429). Back off and retry twice.
+  for (const waitMs of RETRY_WAITS_MS) {
+    if (response.status !== 429) {
+      break;
+    }
+    const retryAfter = Number(response.headers.get("retry-after"));
+    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : waitMs);
+    response = await send(built);
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new QlooHttpError(response.status, path, body);

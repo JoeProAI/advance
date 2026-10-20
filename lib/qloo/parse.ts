@@ -139,6 +139,16 @@ export function overlapFromCompare(raw: unknown): QlooCompareResult {
   };
 }
 
+/** True when the entity has no coordinates or sits within `miles` of the city. */
+export function withinMiles(entity: QlooEntity, city: City, miles: number): boolean {
+  const lat = entity.location?.lat;
+  const lon = entity.location?.lon;
+  if (typeof lat !== "number" || typeof lon !== "number") {
+    return true;
+  }
+  return haversineMiles({ lat, lon }, city) <= miles;
+}
+
 export const HEATMAP_CITY_RADIUS_MILES = 40;
 
 /**
@@ -187,6 +197,20 @@ export function cellsToCities(
       void score;
       return rest;
     });
+}
+
+/**
+ * Keep one city per market: drop a candidate within `miles` of a better one
+ * (Brooklyn next to New York). Input must be sorted best first.
+ */
+export function dedupeMarkets(cities: CandidateCity[], miles = 20): CandidateCity[] {
+  const kept: CandidateCity[] = [];
+  for (const city of cities) {
+    if (!kept.some((other) => haversineMiles(other, city) < miles)) {
+      kept.push(city);
+    }
+  }
+  return kept;
 }
 
 function normalizeName(value: string): string {

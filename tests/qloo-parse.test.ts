@@ -3,6 +3,7 @@ import { pickByTier, roomSize } from "@/lib/agent/rooms";
 import { findCity } from "@/lib/geo/cities";
 import {
   cellsToCities,
+  dedupeMarkets,
   entityKind,
   entityTags,
   explainScore,
@@ -10,6 +11,7 @@ import {
   overlapFromCompare,
   parseEntityList,
   parseHeatmapCells,
+  withinMiles,
 } from "@/lib/qloo/parse";
 import type { QlooEntity, QlooHeatmapCell } from "@/lib/qloo/types";
 
@@ -102,6 +104,24 @@ describe("heatmap cells to cities", () => {
 
   it("drops cells outside the radius", () => {
     expect(cellsToCities([cell(44.1, -103.2, 1, 1)])).toEqual([]);
+  });
+});
+
+describe("venue market check", () => {
+  it("keeps rooms near the city and drops ones from a same-name city elsewhere", () => {
+    const richmond = findCity("Richmond")!;
+    expect(withinMiles({ name: "a", entity_id: "a", location: { lat: 37.55, lon: -77.45 } }, richmond, 30)).toBe(true);
+    expect(withinMiles({ name: "b", entity_id: "b", location: { lat: 37.94, lon: -122.35 } }, richmond, 30)).toBe(false);
+    expect(withinMiles({ name: "c", entity_id: "c" }, richmond, 30)).toBe(true);
+  });
+});
+
+describe("one city per market", () => {
+  it("drops Brooklyn when New York already scored higher", () => {
+    const ny = { ...findCity("New York")!, affinity: 0.98, affinityRank: 0.9, popularity: 1 };
+    const bk = { ...findCity("Brooklyn")!, affinity: 0.97, affinityRank: 0.9, popularity: 1 };
+    const philly = { ...findCity("Philadelphia")!, affinity: 0.9, affinityRank: 0.9, popularity: 1 };
+    expect(dedupeMarkets([ny, bk, philly]).map((city) => city.name)).toEqual(["New York", "Philadelphia"]);
   });
 });
 
