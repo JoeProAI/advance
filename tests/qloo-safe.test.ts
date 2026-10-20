@@ -7,8 +7,8 @@ import { QLOO_HACKATHON_HOST } from "@/lib/config";
 
 describe("public cultural signals", () => {
   it("accepts an act name and a city", () => {
-    expect(assertPublicCulturalQuery("Act", "Marlow & the Night Shifts")).toBe(
-      "Marlow & the Night Shifts",
+    expect(assertPublicCulturalQuery("Act", "Simon & Garfunkel")).toBe(
+      "Simon & Garfunkel",
     );
     expect(assertPublicCulturalQuery("Home city", "Chicago")).toBe("Chicago");
   });

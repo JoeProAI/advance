@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function POST(request: Request): Promise<Response> {
-  const limit = checkPlanRateLimit(clientIp(request.headers));
+  const limit = await checkPlanRateLimit(clientIp(request.headers));
   if (!limit.ok) {
     return Response.json(
       { error: `New plans are limited to 5 per hour from one address. Try again in ${limit.retryAfterSec}s.` },

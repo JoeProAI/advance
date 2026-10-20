@@ -41,7 +41,7 @@ Example: MJ Lenderman, 8 shows, 5h drive cap, first Friday about eight weeks out
 5. Artist or person insights capped at the headliner's popularity + `/v2/insights/compare` → opener shortlist. Overlap is the mean of the top five shared tag scores (compare returns no single overlap number).
 6. Tag / podcast / place / brand insights → promo brief. Routing is ours, not Qloo.
 
-No user name, email, device id, or account id is sent. Inputs are a public act name and optional start city. `.env.example` keeps `QLOO_API_KEY` empty. Live responses are cached only on the server (`.data/`, gitignored).
+No user name, email, device id, or account id is sent. Inputs are a public act name and optional start city. `.env.example` keeps `QLOO_API_KEY` empty. Live responses are cached only on the server (`.data/`, gitignored, or the Convex `qlooCache` table when deployed).
 
 ## 4. Demo
 
@@ -114,7 +114,9 @@ qloo exec find_tags --input '{"query":"music venue","limit":3}'
 | `OPENROUTER_API_KEY` | no | If absent, briefs are deterministic fallback text |
 | `OPENROUTER_MODEL` | no | Default `openai/gpt-4o-mini` |
 | `NEXT_PUBLIC_APP_NAME` | no | Rename the product |
-| `NEXT_PUBLIC_CONVEX_URL` | no | Optional hosted store; file store is the default |
+| `CONVEX_URL` | on Vercel | Convex deployment URL (`https://<name>.convex.cloud`). Set: plans, share links, Qloo cache, and the rate limiter use Convex. Unset: file store under `.data/`. Server-side only. |
+| `ADVANCE_STORE_SECRET` | with `CONVEX_URL` | Shared secret, 24+ chars. Set the same value on Vercel and on the Convex deployment. Every Convex function rejects calls without it. |
+| `CONVEX_DEPLOY_KEY` | CI only | Production deploy key for `npx convex deploy` in the Vercel build. Not read by the app. |
 
 Never commit keys. `.env*` is gitignored except `.env.example`. `QLOO_API_KEY` is read only in [`lib/qloo/live.ts`](lib/qloo/live.ts), which is imported from the Node route [`app/api/plans/route.ts`](app/api/plans/route.ts). A leak test fails if the name (or a set value) can reach a `"use client"` graph or `.next/static`.
 
@@ -125,7 +127,7 @@ Never commit keys. `.env*` is gitignored except `.env.example`. `QLOO_API_KEY` i
 | Qloo entities, heatmaps, tags, compare, trends | Synthetic fixtures shaped like the documented schema. Not copies of Qloo data. | `https://hackathon.api.qloo.com` with `X-Api-Key` |
 | Routing | Real algorithm, same in both modes | Same |
 | Writing | Deterministic briefs if no OpenRouter key | OpenRouter if `OPENROUTER_API_KEY` is set |
-| Share links | File store under `.data/plans` | Same, or Convex once configured |
+| Share links, Qloo cache, rate limit | File store under `.data/` (in-memory rate limit) | Convex when `CONVEX_URL` is set, else the file store |
 
 The three example tickets name real public acts (MJ Lenderman, Sam Morril, Wednesday) so live mode resolves them through Qloo search. In mock mode their ids, cities, rooms, and openers are invented. Because the repository will be public, every mock fixture is hand-written in the repo. Do not paste live Qloo JSON into `lib/qloo/fixtures.ts` or anywhere else that is committed. Live responses are cached only under `.data/` (gitignored) on the server.
 
@@ -136,13 +138,44 @@ Invalid Qloo parameters fail silently with empty results. Every insights call is
 - Next.js App Router on Vercel.
 - One Qloo client: [`lib/qloo/client.ts`](lib/qloo/client.ts).
 - Agent loop: [`lib/agent/run.ts`](lib/agent/run.ts). Same tools with or without a model key.
-- Storage interface: [`lib/storage`](lib/storage). Convex schema is ready in [`convex/`](convex/); the app does not require a Convex deployment to demo.
+- Storage: [`lib/storage`](lib/storage). `CONVEX_URL` set picks the Convex adapter ([`convex-store.ts`](lib/storage/convex-store.ts)); otherwise the file store. Same interface for plans, steps, the Qloo cache, and the rate limiter. Functions live in [`convex/`](convex/).
 - Map: offline CONUS SVG atlas always (route, numbered stops, city labels). MapLibre + OpenFreeMap tiles load on top when they are reachable.
 
-## Open questions for live mode
+## Deploy to Vercel with Convex
 
-- Which `output.heatmap.boundary` values return named cities in the hackathon environment?
-- Exact tag IDs for music venues and comedy clubs (`npm run smoke` prints them).
-- Whether `urn:entity:person` works for comedians in heatmap, place, and opener queries.
-- Whether `/v2/insights/compare` and `/trends/*` respond, and with what payload shape.
-- Coverage for smaller acts. The UI already says when a city is thin instead of inventing a room.
+Vercel's disk is read-only and each instance has its own memory, so the file store cannot hold share links there. Use Convex.
+
+1. Create the Convex project once from your machine: `npx convex dev --once`. This logs you in, creates the project, writes `convex/_generated/`, and pushes the schema to a dev deployment.
+2. Make a secret: `openssl rand -hex 32`. Keep it out of the repo.
+3. Put it on the production Convex deployment, read from stdin so it stays out of shell history: `npx convex env --prod set ADVANCE_STORE_SECRET` and paste the value at the prompt.
+4. Deploy the functions and schema: `npx convex deploy` (asks to confirm production). It typechecks `convex/`, regenerates `convex/_generated/`, and pushes `plans`, `qlooCache`, and `rateLimits`.
+5. In Vercel project settings, add for Production: `CONVEX_URL` (the prod URL printed by step 4, also in the Convex dashboard), `ADVANCE_STORE_SECRET` (same value as step 3), `QLOO_MODE=live`, `QLOO_API_KEY`. Leave `OPENROUTER_API_KEY` unset unless you want model-written briefs.
+6. Optional: let each Vercel build push Convex too. Add `CONVEX_DEPLOY_KEY` (Convex dashboard, production deploy key) to Vercel and set the build command to `npx convex deploy --cmd 'npm run build'`.
+7. Warm the demo cache after deploying, from a shell with the production values loaded: `QLOO_MODE=live npx tsx scripts/warm-cache.ts`. It runs the three demo acts with the same request the landing links send, writes only trimmed Qloo responses to `qlooCache`, saves no plans, and prints counts only.
+
+Notes:
+
+- Convex functions are public endpoints. Each one checks `ADVANCE_STORE_SECRET` and fails closed if it is unset. Never expose the secret or `CONVEX_URL` through `NEXT_PUBLIC_*`.
+- Rate-limit keys are salted SHA-256 hashes of the client IP. Raw IPs are not stored.
+- Cached Qloo payloads are trimmed before storage (names, ids, tags, scores, short text). A national heatmap drops from about 1.5 MB to about 110 KB, under the 1 MiB Convex document limit. Anything still over 900 KB is not cached.
+
+## Openers
+
+Probed Oct 20, 2026: for `urn:entity:artist` and `urn:entity:person`, `signal.location` (POINT plus 50 km radius, weight `very_high`), `signal.location.query`, and `filter.location` plus radius all return near-identical lists for Atlanta, Pittsburgh, and St. Louis. Qloo does not localize these types. So the desk:
+
+- pulls one opener pool per plan (take 50, popularity capped at the headliner's),
+- drops implausible picks: Qloo `start_year` 22 or more years back (legacy names) and `obscurity_scale` 1 to 2 (household names),
+- puts acts whose Qloo birthplace or opening bio line names the stop city first, and says so ("Qloo bio names Chicago"),
+- books no one twice while the pool lasts, and labels any repeat,
+- runs `/v2/insights/compare` only for the lead opener per stop. The second opener shows its Qloo affinity.
+
+## Time budget
+
+`/api/plans` has `maxDuration = 60`. The agent runs under a 50 s deadline. Each Qloo call gets `min(15 s, time left minus 1 s)`; a 429 retry only happens if the wait plus another call still fits; past the deadline calls fail fast into Hold rooms and warn steps instead of hanging the route. Stops run in parallel with at most 3 Qloo requests in flight, and identical concurrent requests share one fetch. With a warm cache the demo plans finish in about 1 to 5 s.
+
+## What live probing found
+
+- `urn:heatmap` returns unnamed geohash cells; the desk snaps them to the nearest of 36 tour cities.
+- `/v2/insights/compare` returns scored shared tags, no overlap number. Advance uses the mean of the top five tag scores.
+- Trends are not served on the hackathon host. Live mode hides momentum.
+- Comedian coverage is thinner: some cities (Richmond) return no comedy rooms.

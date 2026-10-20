@@ -178,41 +178,54 @@ function demoStop(input: {
   };
 }
 
+/*
+ * Desk previews use MJ Lenderman, one of the three demo acts. Cities, rooms,
+ * openers, and scores are copied by name from the live run of Oct 20, 2026
+ * (Chicago, Milwaukee, and Minneapolis stops). No raw Qloo payloads are stored here.
+ */
+const PREVIEW_ACT = {
+  entityId: "demo-act",
+  name: "MJ Lenderman",
+  kind: "artist" as const,
+  description: "Desk preview built from a live Advance run.",
+  popularity: 0.965,
+};
+
 export function demoPartialPlan(): TourPlan {
   const stops = [
     demoStop({
       order: 1,
-      name: "Pittsburgh",
-      date: "2026-12-04",
-      venue: "Lawrenceville Rail",
-      why: "Pittsburgh · room · 280 cap · aff 0.91 · late-night radio",
-      affinity: 0.91,
-      room: "280-cap room",
-      opener: { name: "Hollow Radio", why: "Lawrenceville support, story songs", overlap: 0.71 },
+      name: "Chicago",
+      date: "2026-12-18",
+      venue: "Schubas Tavern",
+      why: "Chicago · Lake View · live music venue · aff 0.95 · Classic",
+      affinity: 0.984,
+      room: "Small room (Qloo tag: Intimate). No capacity on file. Price level 1 of 4.",
+      opener: { name: "Ratboys", why: "Qloo bio names Chicago", overlap: 0.73 },
       driveHours: 0,
       miles: 0,
     }),
     demoStop({
       order: 2,
-      name: "Columbus",
-      date: "2026-12-05",
+      name: "Milwaukee",
+      date: "2026-12-19",
       venue: "Hold",
-      why: "Columbus returned no venue-tagged room. Hold until a place comes back.",
-      affinity: 0.74,
-      driveHours: 2.6,
-      miles: 185,
+      why: "Milwaukee returned no venue-tagged room. Hold until a place comes back.",
+      affinity: 0.888,
+      driveHours: 1.6,
+      miles: 92,
     }),
     demoStop({
       order: 3,
-      name: "Chicago",
-      date: "2026-12-06",
-      venue: "Lincoln Annex",
-      why: "Chicago · room · 340 cap · aff 0.88 · thrift denim",
-      affinity: 0.88,
-      room: "340-cap room",
-      opener: { name: "June Ledger", why: "Pilsen support, night-drive duo", overlap: 0.64 },
-      driveHours: 5.1,
-      miles: 355,
+      name: "Minneapolis",
+      date: "2026-12-21",
+      venue: "The Hook and Ladder Theater & Lounge",
+      why: "Minneapolis · Longfellow · live music venue · aff 0.88 · Artistic",
+      affinity: 0.912,
+      room: "Theater or hall (Qloo tag: Performing arts theater). No capacity on file.",
+      opener: { name: "Cassandra Jenkins", why: "compare overlap from the live run", overlap: 0.85 },
+      driveHours: 5.3,
+      miles: 337,
     }),
   ];
   return {
@@ -221,28 +234,22 @@ export function demoPartialPlan(): TourPlan {
     createdAt: 0,
     updatedAt: 0,
     request: {
-      actName: "Marlow & the Night Shifts",
+      actName: PREVIEW_ACT.name,
       showCount: 8,
-      maxDriveHours: 5,
-      startDate: "2026-12-04",
+      maxDriveHours: 6,
+      startDate: "2026-12-18",
       budgetTier: "either",
     },
-    act: {
-      entityId: "demo-act",
-      name: "Marlow & the Night Shifts",
-      kind: "artist",
-      description: "Synthetic desk preview.",
-      popularity: 0.4,
-    },
+    act: { ...PREVIEW_ACT },
     steps: demoLoadingSteps().map((step) => ({ ...step, status: "done" })),
     route: {
       stops,
-      totalMiles: 220,
-      totalDriveHours: 4.2,
+      totalMiles: 429,
+      totalDriveHours: 6.9,
       nights: 3,
     },
     summary:
-      "Marlow & the Night Shifts plays three cities the heatmap already lights: Pittsburgh to Columbus to Chicago. Columbus is on hold until a room returns.",
+      "MJ Lenderman plays three cities the heatmap already lights: Chicago to Milwaukee to Minneapolis. Milwaukee is on hold until a room returns.",
     qlooMode: "mock",
     writer: "fallback",
     thinData: true,
@@ -257,11 +264,11 @@ export function demoReadyPlan(): TourPlan {
           order: stop.order,
           name: stop.city.name,
           date: stop.date,
-          venue: "Short North Civic",
-          why: "Columbus · room · 260 cap · aff 0.79 · regional beer",
-          affinity: 0.79,
-          room: "260-cap room",
-          opener: { name: "Wiregrass", why: "Short North support, story songs", overlap: 0.58 },
+          venue: "Bremen Cafe",
+          why: "Milwaukee · Riverwest · live music venue · aff 0.93 · Unique",
+          affinity: 0.888,
+          room: "Size unknown. No capacity on file. Price level 1 of 4.",
+          opener: { name: "Dehd", why: "compare overlap from the live run", overlap: 0.84 },
           driveHours: stop.driveHoursFromPrev,
           miles: stop.milesFromPrev,
         })
@@ -272,8 +279,7 @@ export function demoReadyPlan(): TourPlan {
     id: "adv_preview_ready",
     thinData: false,
     route: { ...base.route!, stops: filled },
-    summary:
-      "Marlow & the Night Shifts plays three rooms the heatmap already lights: Pittsburgh to Columbus to Chicago.",
+    summary: "MJ Lenderman plays three rooms the heatmap already lights: Chicago to Milwaukee to Minneapolis.",
   };
 }
 
@@ -291,8 +297,8 @@ export function demoLoadingSteps(): AgentStep[] {
       id: "step_preview_2",
       at: 2,
       title: "Finding where fans cluster",
-      detail: "City-level heatmaps over five regions.",
-      endpoint: "GET /v2/insights?filter.type=urn:entity:destination&output.heatmap.boundary=city",
+      detail: "One national heatmap over the lower 48, cells snapped to tour cities.",
+      endpoint: "GET /v2/insights?filter.type=urn:heatmap",
       status: "running",
     },
   ];
@@ -306,12 +312,6 @@ export function demoLoadingPlan(): TourPlan {
     route: null,
     summary: "",
     steps: demoLoadingSteps(),
-    act: {
-      entityId: "demo-act",
-      name: "Marlow & the Night Shifts",
-      kind: "artist",
-      description: "Synthetic desk preview.",
-      popularity: 0.4,
-    },
+    act: { ...PREVIEW_ACT },
   };
 }

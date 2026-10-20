@@ -161,8 +161,8 @@ export function LandingPage({ fail }: { fail?: string | null }) {
             <Link
               href={toRunHref({
                 example: featured.slug,
-                showCount: "8",
-                maxDriveHours: "5",
+                showCount: String(featured.defaults.showCount),
+                maxDriveHours: String(featured.defaults.maxDriveHours),
                 startDate: firstDate,
               })}
               className="ticket-notch ticket-link paper"
@@ -185,8 +185,8 @@ export function LandingPage({ fail }: { fail?: string | null }) {
                 <Link
                   href={toRunHref({
                     example: act.slug,
-                    showCount: "8",
-                    maxDriveHours: "5",
+                    showCount: String(act.defaults.showCount),
+                    maxDriveHours: String(act.defaults.maxDriveHours),
                     startDate: firstDate,
                   })}
                   className="ticket-notch ticket-link paper"

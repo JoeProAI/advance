@@ -20,6 +20,10 @@ export const PLAN_RATE_LIMIT_PER_HOUR = 5;
  * Demo tickets: real public acts, resolved live through Qloo search.
  * Mock mode pairs these names with invented ids, rooms, and openers.
  */
+/**
+ * Demo acts. `defaults` match the runs verified live and pre-warmed by
+ * scripts/warm-cache.ts, so a demo click reuses cached Qloo answers.
+ */
 export const EXAMPLE_ACTS = [
   {
     slug: "lenderman",
@@ -28,6 +32,7 @@ export const EXAMPLE_ACTS = [
     role: "Indie rock songwriter",
     blurb: "Asheville songwriter. Small rooms where the crowd already knows the words.",
     stamp: "SOLO",
+    defaults: { showCount: 8, maxDriveHours: 6 },
   },
   {
     slug: "morril",
@@ -36,6 +41,7 @@ export const EXAMPLE_ACTS = [
     role: "Touring comedian",
     blurb: "Club weekends and theater one-nighters. Cities that stay out after.",
     stamp: "COMIC",
+    defaults: { showCount: 8, maxDriveHours: 6 },
   },
   {
     slug: "wednesday",
@@ -44,6 +50,7 @@ export const EXAMPLE_ACTS = [
     role: "Indie rock band",
     blurb: "Asheville band. Loud rooms and long drives through the South.",
     stamp: "BAND",
+    defaults: { showCount: 8, maxDriveHours: 6 },
   },
 ] as const;
 

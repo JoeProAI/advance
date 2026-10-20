@@ -1,11 +1,9 @@
-# Convex (optional)
+# Convex store
 
-The app ships with a file store under `.data/` so mock-mode demos and share links work with no Convex account.
+Advance uses Convex as its shared store when `CONVEX_URL` is set: plans and their steps (`plans`), trimmed Qloo responses (`qlooCache`), and the plan rate limiter (`rateLimits`). Without `CONVEX_URL` the app uses the file store under `.data/`.
 
-To switch shareable plans and the Qloo response cache onto Convex:
+Every function takes a `secret` argument and checks it against `ADVANCE_STORE_SECRET` on the deployment (`secret.ts`). Unset or wrong, the call fails. Only the Next.js server holds the secret, so browsers cannot read or write these tables directly. Do not add list-all queries.
 
-1. `npx convex dev` (use `CONVEX_AGENT_MODE=anonymous` only for cloud agents)
-2. Copy `NEXT_PUBLIC_CONVEX_URL` into `.env.local`
-3. Keep using the Next.js API routes — they are the public surface. Wire `lib/storage` to Convex when you want the hosted store.
+`convex/_generated/` is created by `npx convex dev` or `npx convex deploy`. The Next.js side does not import it; it calls functions by name through `anyApi`.
 
-These functions are public because plans are anonymous share documents, not user records. Do not add a list-all-plans query.
+Deploy steps are in the main README under "Deploy to Vercel with Convex".

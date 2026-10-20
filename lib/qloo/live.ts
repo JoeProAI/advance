@@ -13,6 +13,14 @@ import type {
 import { validateInsightsParams } from "@/lib/qloo/validate";
 import { overlapFromCompare, parseEntityList, parseHeatmapCells, parseTags } from "@/lib/qloo/parse";
 import { getPlanStore } from "@/lib/storage";
+import { compactQlooPayload } from "@/lib/qloo/compact";
+import {
+  QLOO_MIN_CALL_MS,
+  QlooDeadlineError,
+  callTimeoutMs,
+  createLimiter,
+  remainingMs,
+} from "@/lib/qloo/deadline";
 
 function assertServer(): void {
   if (typeof window !== "undefined") {
@@ -30,17 +38,26 @@ function apiKey(): string {
 }
 
 const RETRY_WAITS_MS = [800, 2000];
+/** At most this many Qloo requests in flight per server instance. */
+export const QLOO_CONCURRENCY = 3;
+const limit = createLimiter(QLOO_CONCURRENCY);
+/** Parallel stops can ask the same thing at once; share one request. */
+const inFlight = new Map<string, Promise<unknown>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function send(built: ReturnType<typeof buildQlooRequest>): Promise<Response> {
+  const timeout = callTimeoutMs();
+  if (timeout < QLOO_MIN_CALL_MS) {
+    throw new QlooDeadlineError(built.path);
+  }
   return fetch(built.url, {
     method: built.method,
     headers: built.headers,
     cache: "no-store",
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(timeout),
   });
 }
 
@@ -59,23 +76,43 @@ async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
     return cached as T;
   }
 
-  let response = await send(built);
-  // The hackathon host rate-limits bursts (429). Back off and retry twice.
-  for (const waitMs of RETRY_WAITS_MS) {
-    if (response.status !== 429) {
-      break;
+  const pending = inFlight.get(cacheKey);
+  if (pending) {
+    return (await pending) as T;
+  }
+  const request = limit(async () => {
+    if (remainingMs() < QLOO_MIN_CALL_MS) {
+      throw new QlooDeadlineError(path);
     }
-    const retryAfter = Number(response.headers.get("retry-after"));
-    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : waitMs);
-    response = await send(built);
+    let response = await send(built);
+    // The hackathon host rate-limits bursts (429). Back off and retry, but
+    // only while the run still has time for the wait plus another call.
+    for (const waitMs of RETRY_WAITS_MS) {
+      if (response.status !== 429) {
+        break;
+      }
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : waitMs;
+      if (remainingMs() < wait + 2_000) {
+        break;
+      }
+      await sleep(wait);
+      response = await send(built);
+    }
+    if (!response.ok) {
+      const body = await response.text();
+      throw new QlooHttpError(response.status, path, body);
+    }
+    const payload = compactQlooPayload(await response.json());
+    await store.cacheSet(cacheKey, payload);
+    return payload;
+  });
+  inFlight.set(cacheKey, request);
+  try {
+    return (await request) as T;
+  } finally {
+    inFlight.delete(cacheKey);
   }
-  if (!response.ok) {
-    const body = await response.text();
-    throw new QlooHttpError(response.status, path, body);
-  }
-  const payload = (await response.json()) as T;
-  await store.cacheSet(cacheKey, payload);
-  return payload;
 }
 
 export async function liveSearch(params: QlooSearchParams): Promise<QlooEntitiesResponse> {

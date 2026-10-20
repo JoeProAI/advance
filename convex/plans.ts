@@ -1,43 +1,53 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { assertSecret } from "./secret";
 
-const stepValidator = v.object({
-  id: v.string(),
-  at: v.number(),
-  title: v.string(),
-  detail: v.string(),
-  endpoint: v.optional(v.string()),
-  status: v.union(
-    v.literal("running"),
-    v.literal("done"),
-    v.literal("warn"),
-    v.literal("error"),
-  ),
+const status = v.union(v.literal("running"), v.literal("ready"), v.literal("error"));
+
+export const get = query({
+  args: { secret: v.string(), shareId: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    assertSecret(args.secret);
+    const row = await ctx.db
+      .query("plans")
+      .withIndex("by_shareId", (q) => q.eq("shareId", args.shareId))
+      .unique();
+    return row?.planJson ?? null;
+  },
 });
 
-const planReturn = v.union(
-  v.object({
-    shareId: v.string(),
-    status: v.union(v.literal("running"), v.literal("ready"), v.literal("error")),
-    requestJson: v.string(),
-    actJson: v.optional(v.string()),
-    steps: v.array(stepValidator),
-    routeJson: v.optional(v.string()),
-    summary: v.string(),
-    error: v.optional(v.string()),
-    qlooMode: v.union(v.literal("mock"), v.literal("live")),
-    writer: v.union(v.literal("openrouter"), v.literal("fallback")),
-    thinData: v.boolean(),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  }),
-  v.null(),
-);
-
-export const getByShareId = query({
-  args: { shareId: v.string() },
-  returns: planReturn,
+export const save = mutation({
+  args: { secret: v.string(), shareId: v.string(), status, planJson: v.string() },
+  returns: v.null(),
   handler: async (ctx, args) => {
+    assertSecret(args.secret);
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("plans")
+      .withIndex("by_shareId", (q) => q.eq("shareId", args.shareId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { status: args.status, planJson: args.planJson, updatedAt: now });
+      return null;
+    }
+    await ctx.db.insert("plans", {
+      shareId: args.shareId,
+      status: args.status,
+      planJson: args.planJson,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return null;
+  },
+});
+
+/** Atomic append so parallel agent steps never overwrite each other. */
+export const appendStep = mutation({
+  args: { secret: v.string(), shareId: v.string(), stepJson: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    assertSecret(args.secret);
     const row = await ctx.db
       .query("plans")
       .withIndex("by_shareId", (q) => q.eq("shareId", args.shareId))
@@ -45,50 +55,12 @@ export const getByShareId = query({
     if (!row) {
       return null;
     }
-    return {
-      shareId: row.shareId,
-      status: row.status,
-      requestJson: row.requestJson,
-      actJson: row.actJson,
-      steps: row.steps,
-      routeJson: row.routeJson,
-      summary: row.summary,
-      error: row.error,
-      qlooMode: row.qlooMode,
-      writer: row.writer,
-      thinData: row.thinData,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
-  },
-});
-
-export const upsert = mutation({
-  args: {
-    shareId: v.string(),
-    status: v.union(v.literal("running"), v.literal("ready"), v.literal("error")),
-    requestJson: v.string(),
-    actJson: v.optional(v.string()),
-    steps: v.array(stepValidator),
-    routeJson: v.optional(v.string()),
-    summary: v.string(),
-    error: v.optional(v.string()),
-    qlooMode: v.union(v.literal("mock"), v.literal("live")),
-    writer: v.union(v.literal("openrouter"), v.literal("fallback")),
-    thinData: v.boolean(),
-  },
-  returns: v.string(),
-  handler: async (ctx, args) => {
+    const plan = JSON.parse(row.planJson) as { steps?: unknown[]; updatedAt?: number };
     const now = Date.now();
-    const existing = await ctx.db
-      .query("plans")
-      .withIndex("by_shareId", (q) => q.eq("shareId", args.shareId))
-      .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, { ...args, updatedAt: now });
-      return args.shareId;
-    }
-    await ctx.db.insert("plans", { ...args, createdAt: now, updatedAt: now });
-    return args.shareId;
+    plan.steps = [...(plan.steps ?? []), JSON.parse(args.stepJson) as unknown];
+    plan.updatedAt = now;
+    const planJson = JSON.stringify(plan);
+    await ctx.db.patch(row._id, { planJson, updatedAt: now });
+    return planJson;
   },
 });

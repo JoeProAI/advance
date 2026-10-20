@@ -14,8 +14,8 @@ import {
 import { US_STATE_SHAPES } from "@/lib/geo/states";
 import { findCity } from "@/lib/geo/cities";
 
-const MARLOW = ["Pittsburgh", "Columbus", "Cincinnati", "Louisville", "Indianapolis", "Chicago", "Milwaukee"];
-const RINA = [
+const MIDWEST_RUN = ["Pittsburgh", "Columbus", "Cincinnati", "Louisville", "Indianapolis", "Chicago", "Milwaukee"];
+const EAST_RUN = [
   "Boston",
   "New York",
   "Philadelphia",
@@ -51,17 +51,17 @@ function fitted(names: string[]) {
 }
 
 describe("route-fitted night atlas", () => {
-  it("zooms Marlow tighter than the full CONUS outline", () => {
+  it("zooms the Midwest run tighter than the full CONUS outline", () => {
     const full = conusBounds();
-    const view = routeViewBounds(cities(MARLOW));
+    const view = routeViewBounds(cities(MIDWEST_RUN));
     const fullSpanX = full.maxX - full.minX;
     const viewSpanX = view.maxX - view.minX;
     expect(viewSpanX).toBeLessThan(fullSpanX * 0.55);
     expect(viewSpanX).toBeGreaterThan(fullSpanX * 0.12);
   });
 
-  it("spreads Marlow stops across the map instead of a small CONUS patch", () => {
-    const { points, map } = fitted(MARLOW);
+  it("spreads Midwest run stops across the map instead of a small CONUS patch", () => {
+    const { points, map } = fitted(MIDWEST_RUN);
     const xs = points.map((point) => point.x);
     const ys = points.map((point) => point.y);
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(map.w * 0.4);
@@ -75,7 +75,7 @@ describe("route-fitted night atlas", () => {
   });
 
   it("keeps Louisville, Columbus, and Indianapolis markers from stacking", () => {
-    const { points } = fitted(MARLOW);
+    const { points } = fitted(MIDWEST_RUN);
     const cluster = points.filter((point) =>
       ["Louisville", "Columbus", "Indianapolis"].includes(point.city.name),
     );
@@ -90,7 +90,7 @@ describe("route-fitted night atlas", () => {
   });
 
   it("keeps Boston inside the map frame so the east edge does not clip it", () => {
-    const { points, map } = fitted(RINA);
+    const { points, map } = fitted(EAST_RUN);
     const boston = points.find((point) => point.city.name === "Boston");
     expect(boston).toBeTruthy();
     expect(boston!.x).toBeGreaterThan(map.x + 16);
@@ -100,7 +100,7 @@ describe("route-fitted night atlas", () => {
   });
 
   it("separates Baltimore, New York, and Pittsburgh on Rina's corridor", () => {
-    const { points } = fitted(RINA);
+    const { points } = fitted(EAST_RUN);
     const named = Object.fromEntries(points.map((point) => [point.city.name, point]));
     const pairs: Array<[string, string]> = [
       ["Baltimore", "New York"],
@@ -138,7 +138,7 @@ describe("route-fitted night atlas", () => {
   it("keeps the CONUS locator in its own frame so map slice cannot clip it", () => {
     expect(ATLAS_LAYOUT.inset).toEqual({ x: 0, y: 0, w: 176, h: 116 });
     const world = conusBounds();
-    const view = routeViewBounds(cities(MARLOW));
+    const view = routeViewBounds(cities(MIDWEST_RUN));
     const window = viewWindowInRect(view, world, ATLAS_LAYOUT.inset);
     expect(window.x).toBeGreaterThanOrEqual(ATLAS_LAYOUT.inset.x);
     expect(window.y).toBeGreaterThanOrEqual(ATLAS_LAYOUT.inset.y);
@@ -151,7 +151,7 @@ describe("route-fitted night atlas", () => {
   it("fills the atlas frame with local state polygons instead of a lone CONUS ring", () => {
     expect(US_STATE_SHAPES.length).toBeGreaterThanOrEqual(48);
     expect(ATLAS_LAYOUT.map).toEqual({ x: 0, y: 0, w: ATLAS_WIDTH, h: ATLAS_HEIGHT });
-    const view = routeViewBounds(cities(MARLOW));
+    const view = routeViewBounds(cities(MIDWEST_RUN));
     const paths = statePathsInBounds(view, ATLAS_LAYOUT.map);
     expect(paths.length).toBeGreaterThanOrEqual(48);
     const ohio = paths.find((path) => path.name === "Ohio");

@@ -1,22 +1,24 @@
+import { createHash } from "node:crypto";
 import { PLAN_RATE_LIMIT_PER_HOUR } from "@/lib/config";
+import { getPlanStore, type PlanStore } from "@/lib/storage";
 
-type Bucket = { count: number; resetAt: number };
+const HOUR = 60 * 60 * 1000;
 
-const buckets = new Map<string, Bucket>();
+/** IPs are hashed before they reach the store. */
+export function rateLimitKey(ip: string, salt = process.env.ADVANCE_STORE_SECRET ?? "advance-local"): string {
+  return `plans:${createHash("sha256").update(`${salt}:${ip}`).digest("hex").slice(0, 32)}`;
+}
 
-export function checkPlanRateLimit(ip: string): { ok: boolean; retryAfterSec: number } {
-  const now = Date.now();
-  const hour = 60 * 60 * 1000;
-  const current = buckets.get(ip);
-  if (!current || current.resetAt <= now) {
-    buckets.set(ip, { count: 1, resetAt: now + hour });
-    return { ok: true, retryAfterSec: 3600 };
+export async function checkPlanRateLimit(
+  ip: string,
+  store: PlanStore = getPlanStore(),
+): Promise<{ ok: boolean; retryAfterSec: number }> {
+  try {
+    return await store.rateLimit(rateLimitKey(ip), PLAN_RATE_LIMIT_PER_HOUR, HOUR);
+  } catch {
+    // Store down: let the request through rather than block every visitor.
+    return { ok: true, retryAfterSec: 0 };
   }
-  if (current.count >= PLAN_RATE_LIMIT_PER_HOUR) {
-    return { ok: false, retryAfterSec: Math.ceil((current.resetAt - now) / 1000) };
-  }
-  current.count += 1;
-  return { ok: true, retryAfterSec: Math.ceil((current.resetAt - now) / 1000) };
 }
 
 export function clientIp(headers: Headers): string {

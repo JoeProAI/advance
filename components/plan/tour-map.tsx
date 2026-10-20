@@ -26,6 +26,41 @@ export function TourMap({ stops, selectedOrder, onSelect }: TourMapProps) {
   const stopKey = stops.map((stop) => `${stop.order}:${stop.city.name}`).join("|");
   const [readyFor, setReadyFor] = useState<string | null>(null);
   const tilesReady = readyFor === stopKey;
+  const plateRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const [frame, setFrame] = useState<{ w: number; h: number } | undefined>();
+  const [avoid, setAvoid] = useState<{ x: number; y: number; w: number; h: number } | undefined>();
+
+  // Measure the plate and the CONUS card so the route is fitted to the real
+  // box and every leg stays clear of the card.
+  useEffect(() => {
+    const plate = plateRef.current;
+    const shell = shellRef.current;
+    if (!plate || !shell || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const measure = () => {
+      const box = plate.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) {
+        return;
+      }
+      setFrame({ w: box.width, h: box.height });
+      const card = shell.querySelector<HTMLElement>(".atlas-inset")?.getBoundingClientRect();
+      if (!card || card.width === 0) {
+        setAvoid(undefined);
+        return;
+      }
+      const x = card.left - box.left;
+      const y = card.top - box.top;
+      const overlaps = x < box.width && y < box.height && x + card.width > 0 && y + card.height > 0;
+      setAvoid(overlaps ? { x, y, w: card.width, h: card.height } : undefined);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(plate);
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [stopKey]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -60,7 +95,15 @@ export function TourMap({ stops, selectedOrder, onSelect }: TourMapProps) {
           for (const stop of stops) {
             bounds.extend([stop.city.lon, stop.city.lat]);
           }
-          map.fitBounds(bounds, { padding: 56, duration: 0, maxZoom: 6.2 });
+          // Keep the underlay's padding clear of the CONUS card too.
+          const card = hostRef.current?.closest(".atlas-shell")?.querySelector<HTMLElement>(".atlas-inset");
+          const extraRight = card ? Math.min(card.offsetWidth, 220) : 0;
+          const extraBottom = card ? Math.min(card.offsetHeight, 160) : 0;
+          map.fitBounds(bounds, {
+            padding: { top: 56, left: 56, right: 56 + extraRight, bottom: 56 + extraBottom },
+            duration: 0,
+            maxZoom: 6.2,
+          });
           setReadyFor(stopKey);
         });
       } catch {
@@ -86,7 +129,7 @@ export function TourMap({ stops, selectedOrder, onSelect }: TourMapProps) {
   }
 
   return (
-    <div className="atlas-shell">
+    <div className="atlas-shell" ref={shellRef}>
       <div className="atlas-legend-wrap">
         <ol className="atlas-legend" aria-label="Tour stops">
           {stops.map((stop) => (
@@ -104,7 +147,7 @@ export function TourMap({ stops, selectedOrder, onSelect }: TourMapProps) {
         </ol>
       </div>
       <div className="atlas-plate">
-        <div className="atlas-plate-map">
+        <div className="atlas-plate-map" ref={plateRef}>
           <div ref={hostRef} className="absolute inset-0 z-0" style={{ opacity: tilesReady ? 1 : 0 }} aria-hidden />
           <RouteAtlas
             stops={stops}
@@ -113,6 +156,8 @@ export function TourMap({ stops, selectedOrder, onSelect }: TourMapProps) {
             dimBase={tilesReady}
             selectedOrder={selectedOrder}
             onSelect={onSelect}
+            frame={frame}
+            avoid={avoid}
             className="absolute inset-0 z-[2] block h-full w-full"
           />
           <p className="ticket-kicker pointer-events-none absolute top-3 right-3 z-[3] bg-[var(--color-bg)] px-2 py-1 text-[var(--color-accent)]">

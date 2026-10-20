@@ -189,19 +189,27 @@ export async function mockInsights(params: QlooInsightsParams): Promise<QlooEnti
   }
 
   if (type === "urn:entity:artist" || type === "urn:entity:person") {
-    const cityName = location;
-    if (!cityName || !act.cityNames.includes(cityName)) {
-      return empty;
-    }
-    const entities = openersFor(act, cityName).map((opener, i) => ({
-      name: opener.name,
-      entity_id: syntheticEntityId("4444", `${act.slug}:${cityName}:opener:${opener.name}`),
-      type: "urn:entity",
-      subtype: type,
-      popularity: 0.11 + i * 0.05 + (opener.name.length % 7) / 100,
-      properties: { short_description: opener.note },
-      query: { affinity: 0.82 - i * 0.07 + (opener.name.length % 5) / 100 },
-    }));
+    // With a location: that city's synthetic openers. Without one (the
+    // tour-wide opener pool): every city's openers, each with a synthetic
+    // bio naming its home city so the local boost has something to read.
+    const cityNames = location ? (act.cityNames.includes(location) ? [location] : []) : act.cityNames;
+    const entities = cityNames.flatMap((cityName) =>
+      openersFor(act, cityName).map((opener, i) => {
+        const home = findCity(cityName);
+        return {
+          name: opener.name,
+          entity_id: syntheticEntityId("4444", `${act.slug}:${cityName}:opener:${opener.name}`),
+          type: "urn:entity",
+          subtype: type,
+          popularity: 0.11 + i * 0.05 + (opener.name.length % 7) / 100,
+          properties: {
+            short_description: opener.note,
+            biography: `Synthetic act formed in ${cityName}${home ? `, ${home.region}` : ""}.`,
+          },
+          query: { affinity: 0.82 - i * 0.07 + (opener.name.length % 5) / 100 },
+        };
+      }),
+    );
     return parseEntityList({ success: true, results: { entities } });
   }
 

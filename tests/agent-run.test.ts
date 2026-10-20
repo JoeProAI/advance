@@ -5,6 +5,8 @@ vi.mock("@/lib/storage", () => {
   const cache = new Map<string, unknown>();
   return {
     getPlanStore: () => ({
+      kind: "file",
+      rateLimit: async () => ({ ok: true, retryAfterSec: 0 }),
       create: async (plan: unknown) => plan,
       get: async () => null,
       save: async (plan: unknown) => plan,
@@ -59,8 +61,8 @@ describe("tour agent in mock mode", () => {
 });
 
 // Synthetic live-shaped responses keyed by request. Not Qloo data.
-function liveStub(failVenues: boolean, idSuffix: string) {
-  const act = { name: "Test Band", entity_id: `00000000-9999-4000-8000-${idSuffix.padStart(12, "0")}`, types: ["urn:entity:artist"], popularity: 0.9 };
+function liveStub(failVenues: boolean, idSuffix: string, actName = "Test Band") {
+  const act = { name: actName, entity_id: `00000000-9999-4000-8000-${idSuffix.padStart(12, "0")}`, types: ["urn:entity:artist"], popularity: 0.9 };
   const calls: string[] = [];
   const fetchMock = vi.fn(async (input: string | URL) => {
     const url = new URL(String(input));
@@ -141,6 +143,39 @@ describe("tour agent against live-shaped responses", () => {
     expect(plan.thinData).toBe(true);
     expect(plan.route!.stops.every((stop) => stop.venue.name === "Hold")).toBe(true);
     expect(plan.steps.some((step) => step.status === "warn")).toBe(true);
+  });
+
+  it("pulls one opener pool, compares only the lead, and books no one twice while it lasts", async () => {
+    const { fetchMock, calls } = liveStub(false, "3", "Pool Band");
+    vi.stubGlobal("fetch", fetchMock);
+    const plan = await runTourAgent(request("Pool Band"));
+    const stops = plan.route!.stops;
+    expect(calls.filter((call) => call.endsWith("urn:entity:artist"))).toHaveLength(1);
+    // Lead only; a repeated lead reuses its cached compare.
+    const leads = new Set(stops.map((stop) => stop.openers[0]?.entityId));
+    expect(calls.filter((call) => call.startsWith("/v2/insights/compare"))).toHaveLength(leads.size);
+    const firstStop = stops.slice(0, 1).flatMap((stop) => stop.openers.map((o) => o.name));
+    expect(new Set(firstStop).size).toBe(firstStop.length);
+    expect(stops[0]!.openers[1]?.overlap).toBeUndefined();
+  });
+
+  it("stays inside the run budget when Qloo hangs", async () => {
+    const { fetchMock } = liveStub(false, "4", "Slow Band");
+    const hanging = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("filter.type") === "urn:entity:place") {
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")));
+        });
+      }
+      return fetchMock(input);
+    });
+    vi.stubGlobal("fetch", hanging);
+    const started = Date.now();
+    const plan = await runTourAgent(request("Slow Band"), {}, 3_000);
+    expect(Date.now() - started).toBeLessThan(4_500);
+    expect(plan.status).toBe("ready");
+    expect(plan.route!.stops.every((stop) => stop.venue.name === "Hold")).toBe(true);
   });
 
   it("still fails hard on a 401", async () => {

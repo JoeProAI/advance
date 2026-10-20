@@ -14,6 +14,8 @@ import {
   withinMiles,
 } from "@/lib/qloo/parse";
 import { PLACE_TAGS, cityHeatmapParams } from "@/lib/qloo/request";
+import { withDeadline } from "@/lib/qloo/deadline";
+import { assignOpeners, rejectOpener, type AssignedOpener } from "@/lib/agent/openers";
 import { harnessLabel } from "@/lib/qloo/workflows";
 import type { QlooEntitiesResponse, QlooEntity } from "@/lib/qloo/types";
 import { assignDates, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
@@ -59,6 +61,9 @@ function asNumber(value: number | undefined, fallback: number): number {
 type Client = ReturnType<typeof createQlooClient>;
 
 const VENUE_RADIUS_MILES = 30;
+const OPENER_POOL_TAKE = 50;
+/** Agent budget inside the 60 s route: leaves room for the store writes. */
+export const AGENT_BUDGET_MS = 50_000;
 type Emit = (next: AgentStep) => Promise<void>;
 
 const GENERIC_AMBIENCE = new Set(["Casual", "Social", "Lively", "Place", "Tourist attraction"]);
@@ -151,55 +156,65 @@ async function pickVenue(client: Client, act: ResolvedAct, city: City, request: 
   };
 }
 
-async function pickOpeners(
-  client: Client,
-  act: ResolvedAct,
-  cityName: string,
-  locationQuery: string,
-  used: Set<string>,
-): Promise<OpenerPick[]> {
+/** Tour-wide opener pool: one call, then plausibility filtering. */
+async function openerPool(client: Client, act: ResolvedAct): Promise<{ pool: QlooEntity[]; dropped: string[] }> {
   const type = act.kind === "person" ? "urn:entity:person" : "urn:entity:artist";
-  // Openers should draw less than the headliner. Cap at the act's own
-  // popularity percentile instead of a fixed 0.45, which returned obscure
-  // picks for every act probed.
+  // Openers should draw less than the headliner, so cap at the act's own
+  // popularity percentile.
   const cap = Math.max(0.3, Math.min(0.99, act.popularity));
   const raw = await client.insights({
     "filter.type": type,
     "signal.interests.entities": act.entityId,
-    "signal.location.query": locationQuery,
     "filter.exclude.entities": act.entityId,
     "filter.popularity.max": Number(cap.toFixed(3)),
-    take: 8,
+    take: OPENER_POOL_TAKE,
   });
   if (isHeatmapResponse(raw)) {
-    return [];
+    return { pool: [], dropped: [] };
   }
-  // Prefer names not already booked on an earlier stop. Qloo's location
-  // weighting is light, so neighboring cities often return the same names;
-  // fill with a repeat only when nothing new came back.
-  const others = raw.results.entities.filter((entity) => entity.entity_id !== act.entityId);
-  const entities = [
-    ...others.filter((entity) => !used.has(entity.entity_id)),
-    ...others.filter((entity) => used.has(entity.entity_id)),
-  ].slice(0, 2);
-  const compared = await Promise.all(
-    entities.map((entity) => client.compare([act.entityId], [entity.entity_id])),
-  );
-  return entities.map((entity, index) => {
-    used.add(entity.entity_id);
-    const result = compared[index]?.results;
-    const overlap = result?.overlap ?? 0;
+  const pool: QlooEntity[] = [];
+  const dropped: string[] = [];
+  for (const entity of raw.results.entities) {
+    const reason = rejectOpener(entity, act);
+    if (reason) {
+      if (reason !== "self") dropped.push(`${entity.name} (${reason})`);
+    } else {
+      pool.push(entity);
+    }
+  }
+  return { pool, dropped };
+}
+
+/** Compare only the lead opener; the second keeps its Qloo affinity. */
+async function scoreOpeners(
+  client: Client,
+  act: ResolvedAct,
+  cityName: string,
+  assigned: AssignedOpener[],
+): Promise<OpenerPick[]> {
+  const lead = assigned[0];
+  const compared = lead ? await client.compare([act.entityId], [lead.entity.entity_id]) : undefined;
+  return assigned.map(({ entity, local, repeat }, index) => {
     const affinity = asNumber(entity.query?.affinity, 0);
+    const result = index === 0 ? compared?.results : undefined;
+    const overlap = index === 0 ? (result?.overlap ?? 0) : undefined;
     const shared = result?.shared_tags?.slice(0, 2).join(", ");
-    const note = shared ? `shares ${shared}` : entityDescription(entity) || "audience pick";
+    const parts = [
+      typeof overlap === "number" ? `overlap ${overlap.toFixed(2)}` : undefined,
+      `affinity ${affinity.toFixed(2)}`,
+      local ? `Qloo bio names ${cityName}` : undefined,
+      repeat ? "also on an earlier date" : undefined,
+      shared ? `shares ${shared}` : entityDescription(entity) || undefined,
+    ].filter(Boolean);
     return {
       entityId: entity.entity_id,
       name: entity.name,
       kind: entityKind(entity, act.kind),
       affinity,
       popularity: entityPopularity(entity, 0),
-      overlap,
-      why: `${entity.name} for ${cityName}: overlap ${overlap.toFixed(2)} · affinity ${affinity.toFixed(2)} · ${note}`,
+      ...(typeof overlap === "number" ? { overlap } : {}),
+      local,
+      why: `${entity.name} for ${cityName}: ${parts.join(" · ")}`,
     };
   });
 }
@@ -269,16 +284,27 @@ async function softly<T>(emit: Emit, label: string, fallback: T, run: () => Prom
   }
 }
 
-export async function runTourAgent(
+export function runTourAgent(
   request: PlanRequest,
   hooks: RunHooks = {},
+  budgetMs = AGENT_BUDGET_MS,
+): Promise<Omit<TourPlan, "id" | "createdAt" | "updatedAt">> {
+  return withDeadline(budgetMs, () => runWithinDeadline(request, hooks));
+}
+
+async function runWithinDeadline(
+  request: PlanRequest,
+  hooks: RunHooks,
 ): Promise<Omit<TourPlan, "id" | "createdAt" | "updatedAt">> {
   const client = createQlooClient();
   const writer = resolveWriter();
   const steps: AgentStep[] = [];
-  const emit = async (next: AgentStep) => {
+  // Stops run in parallel; chain step writes so the store sees them in order.
+  let chain: Promise<void> = Promise.resolve();
+  const emit = (next: AgentStep): Promise<void> => {
     steps.push(next);
-    await hooks.onStep?.(next);
+    chain = chain.then(() => hooks.onStep?.(next)).catch(() => undefined);
+    return chain;
   };
 
   await emit(
@@ -406,85 +432,84 @@ export async function runTourAgent(
     .filter((tag) => !tag.type?.includes("keyword"))
     .map((tag) => tag.name)
     .slice(0, 8);
-  const usedOpeners = new Set<string>();
 
-  const stops: RoutedStop[] = [];
-  let thin = candidates.length < request.showCount;
-  for (let i = 0; i < routed.cities.length; i += 1) {
-    const city = routed.cities[i]!;
-    // "Washington" alone resolved outside DC and "Richmond" can land in
-    // California, so every location query carries the state.
-    const where = cityKey(city);
+  await emit(
+    step(
+      "Pulling the opener pool",
+      `${act.kind === "person" ? "Comics" : "Artists"} below the headliner's popularity, one call for the whole run. Qloo's location signal does not localize these types, so the desk boosts acts whose Qloo bio names the stop city and books no one twice.`,
+      `GET /v2/insights?filter.type=${act.kind === "person" ? "urn:entity:person" : "urn:entity:artist"} · ${harnessLabel("compare_audiences")}`,
+    ),
+  );
+  const poolRun = await softly(emit, "Opener pool", { pool: [] as QlooEntity[], dropped: [] as string[] }, () =>
+    openerPool(client, act),
+  );
+  if (poolRun.value.dropped.length > 0) {
     await emit(
       step(
-        `Scoring venues in ${city.name}`,
-        `filter.tags=${act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue}`,
-        `GET /v2/insights?filter.type=urn:entity:place · ${harnessLabel("recommend")}`,
+        "Dropped implausible openers",
+        poolRun.value.dropped.slice(0, 8).join(", "),
       ),
     );
-    const venue = (
-      await softly(emit, `Venues in ${city.name}`, holdVenue(city.name, "Qloo venue call failed for this city."), () =>
-        pickVenue(client, act, city, request),
-      )
-    ).value;
-    if (venue.entityId === "thin") {
-      thin = true;
-    }
-    await emit(
-      step(
-        `Local openers in ${city.name}`,
-        `${act.kind === "person" ? "Comics" : "Artists"} below the headliner's popularity, weighted to ${city.name}, plus compare.`,
-        `GET /v2/insights + /v2/insights/compare · ${harnessLabel("compare_audiences")}`,
-      ),
-    );
-    const openersRun = await softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
-      pickOpeners(client, act, city.name, where, usedOpeners),
-    );
-    const openers = openersRun.value;
-    if (openersRun.failed || openers.length === 0) {
-      thin = true;
-    }
-    await emit(
-      step(
-        `Promo brief for ${city.name}`,
-        "Podcasts, bars, brands, and taste tags.",
-        `GET /v2/insights (podcast, place, brand) · ${harnessLabel("recommend")}`,
-      ),
-    );
-    const promo = (
-      await softly(
-        emit,
-        `Promo for ${city.name}`,
-        { podcasts: [], bars: [], brands: [], tags: sharedTags },
-        () => promoFacts(client, act, where, sharedTags),
-      )
-    ).value;
-    const brief: PromoBrief = await writeBrief({
-      act,
-      city: city.name,
-      venue: venue.name,
-      venueWhy: venue.why,
-      openers,
-      podcasts: promo.podcasts,
-      bars: promo.bars,
-      brands: promo.brands,
-      tags: promo.tags,
-      affinity: city.affinity,
-    });
-    stops.push({
-      order: i + 1,
-      date: dates[i]!,
-      city,
-      affinity: city.affinity,
-      affinityRank: city.affinityRank,
-      venue,
-      openers,
-      overlap: openers[0]?.overlap ?? 0,
-      brief,
-      driveHoursFromPrev: city.driveHoursFromPrev,
-      milesFromPrev: city.milesFromPrev,
-    });
   }
+  const assignments = assignOpeners(poolRun.value.pool, routed.cities);
+
+  let thin = candidates.length < request.showCount;
+  const stops: RoutedStop[] = await Promise.all(
+    routed.cities.map(async (city, i): Promise<RoutedStop> => {
+      // "Washington" alone resolved outside DC and "Richmond" can land in
+      // California, so every location query carries the state.
+      const where = cityKey(city);
+      await emit(
+        step(
+          `Booking ${city.name}`,
+          `Venue (filter.tags=${act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue}), opener compare, podcasts, bars, brands.`,
+          `GET /v2/insights + /v2/insights/compare · ${harnessLabel("recommend")}`,
+        ),
+      );
+      const [venueRun, openersRun, promoRun] = await Promise.all([
+        softly(emit, `Venues in ${city.name}`, holdVenue(city.name, "Qloo venue call failed for this city."), () =>
+          pickVenue(client, act, city, request),
+        ),
+        softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
+          scoreOpeners(client, act, city.name, assignments[i] ?? []),
+        ),
+        softly(emit, `Promo for ${city.name}`, { podcasts: [], bars: [], brands: [], tags: sharedTags }, () =>
+          promoFacts(client, act, where, sharedTags),
+        ),
+      ]);
+      const venue = venueRun.value;
+      const openers = openersRun.value;
+      if (venue.entityId === "thin" || openersRun.failed || openers.length === 0) {
+        thin = true;
+      }
+      const promo = promoRun.value;
+      const brief: PromoBrief = await writeBrief({
+        act,
+        city: city.name,
+        venue: venue.name,
+        venueWhy: venue.why,
+        openers: openers.map((opener) => ({ ...opener, overlap: opener.overlap ?? opener.affinity })),
+        podcasts: promo.podcasts,
+        bars: promo.bars,
+        brands: promo.brands,
+        tags: promo.tags,
+        affinity: city.affinity,
+      });
+      return {
+        order: i + 1,
+        date: dates[i]!,
+        city,
+        affinity: city.affinity,
+        affinityRank: city.affinityRank,
+        venue,
+        openers,
+        overlap: openers[0]?.overlap ?? 0,
+        brief,
+        driveHoursFromPrev: city.driveHoursFromPrev,
+        milesFromPrev: city.milesFromPrev,
+      };
+    }),
+  );
 
   const route: RoutedTour = {
     stops,
@@ -496,6 +521,7 @@ export async function runTourAgent(
   await emit(
     step("Tour desk closed", "The last call is in. The plate is ready to tear."),
   );
+  await chain;
 
   return {
     status: "ready",

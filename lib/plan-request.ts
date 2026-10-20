@@ -31,11 +31,11 @@ export function parsePlanRequest(input: Record<string, unknown>): PlanRequest {
     throw new Error("Enter a musician or comedian.");
   }
   const publicActName = assertPublicCulturalQuery("Act", actName);
-  const showCount = Number(input.showCount ?? DEFAULT_SHOW_COUNT);
+  const showCount = Number(input.showCount ?? example?.defaults.showCount ?? DEFAULT_SHOW_COUNT);
   if (!Number.isFinite(showCount) || showCount < 3 || showCount > 12) {
     throw new Error("Number of shows must be between 3 and 12.");
   }
-  const maxDriveHours = Number(input.maxDriveHours ?? DEFAULT_MAX_DRIVE_HOURS);
+  const maxDriveHours = Number(input.maxDriveHours ?? example?.defaults.maxDriveHours ?? DEFAULT_MAX_DRIVE_HOURS);
   if (!Number.isFinite(maxDriveHours) || maxDriveHours < 2 || maxDriveHours > 12) {
     throw new Error("Max drive hours must be between 2 and 12.");
   }

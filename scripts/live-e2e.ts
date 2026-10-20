@@ -23,7 +23,8 @@ globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters
 async function run(slug: string) {
   const before = qlooCalls;
   const started = Date.now();
-  const parsed = parsePlanRequest({ example: slug, showCount: 8, maxDriveHours: 6 });
+  // Same request a demo link sends (EXAMPLE_ACTS defaults), so keys match the warm cache.
+  const parsed = parsePlanRequest({ example: slug });
   const result = await runTourAgent(parsed);
   const now = Date.now();
   const plan = { ...result, id: createId("adv"), createdAt: now, updatedAt: now };
@@ -42,6 +43,10 @@ async function run(slug: string) {
     seconds: Math.round((Date.now() - started) / 100) / 10,
     totalMiles: Math.round(plan.route?.totalMiles ?? 0),
     warnings: plan.steps.filter((step) => step.status !== "done").map((step) => `${step.title}: ${step.detail}`),
+    uniqueOpeners: new Set(stops.flatMap((stop) => stop.openers.map((opener) => opener.name))).size,
+    openerSlots: stops.reduce((sum, stop) => sum + stop.openers.length, 0),
+    localOpeners: stops.reduce((sum, stop) => sum + stop.openers.filter((opener) => opener.local).length, 0),
+    dropped: plan.steps.find((step) => step.title === "Dropped implausible openers")?.detail,
     stops: stops.map((stop) => ({
       date: stop.date,
       city: stop.city.name,
@@ -49,7 +54,10 @@ async function run(slug: string) {
       venue: stop.venue.name,
       room: stop.venue.estimatedRoom,
       why: stop.venue.why,
-      openers: stop.openers.map((opener) => `${opener.name} (${opener.overlap.toFixed(2)})`),
+      openers: stop.openers.map(
+        (opener) =>
+          `${opener.name} (${typeof opener.overlap === "number" ? `ov ${opener.overlap.toFixed(2)}` : `aff ${opener.affinity.toFixed(2)}`}${opener.local ? ", local" : ""})`,
+      ),
       podcasts: stop.brief.podcasts.length,
       bars: stop.brief.bars.length,
       brands: stop.brief.brands.length,

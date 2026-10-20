@@ -356,3 +356,85 @@ export function isInsideConusView(lon: number, lat: number): boolean {
   const point = projectConus(lon, lat);
   return point.x >= 0 && point.x <= ATLAS_WIDTH && point.y >= 0 && point.y <= ATLAS_HEIGHT;
 }
+
+/** Clearance around the card, in viewBox units: a marker plus its stroke and a gap. */
+export const ROUTE_CLEARANCE = 30;
+
+function segmentSamples(points: AtlasPoint[], steps = 12): AtlasPoint[] {
+  const out: AtlasPoint[] = [...points];
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    for (let s = 1; s < steps; s += 1) {
+      const t = s / steps;
+      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    }
+  }
+  return out;
+}
+
+function hitsRect(point: AtlasPoint, rect: AtlasRect, margin: number): boolean {
+  return (
+    point.x > rect.x - margin &&
+    point.x < rect.x + rect.w + margin &&
+    point.y > rect.y - margin &&
+    point.y < rect.y + rect.h + margin
+  );
+}
+
+/**
+ * Route window fitted to the real drawing frame. Every stop marker and every
+ * leg stays inside the frame and clear of `avoid` (the CONUS locator card),
+ * by widening the view and nudging it away from the card until nothing
+ * touches it.
+ */
+export function fitRouteView(
+  stops: Array<{ lon: number; lat: number }>,
+  frame: AtlasRect,
+  avoid?: AtlasRect,
+  margin = ROUTE_CLEARANCE,
+): AtlasBounds {
+  let view = routeViewBounds(stops, frame.w / frame.h);
+  if (!avoid || stops.length === 0) {
+    return view;
+  }
+  const clear = (bounds: AtlasBounds) => routeClearOf(stops, bounds, frame, avoid, margin);
+  for (let i = 0; i < 12 && !clear(view); i += 1) {
+    const spanX = view.maxX - view.minX;
+    const spanY = view.maxY - view.minY;
+    const grow = 1.1;
+    // Shift the window toward the card so the route slides away from it.
+    const avoidCx = avoid.x + avoid.w / 2 - (frame.x + frame.w / 2);
+    const avoidCy = avoid.y + avoid.h / 2 - (frame.y + frame.h / 2);
+    const shiftX = Math.sign(avoidCx) * spanX * 0.05;
+    const shiftY = -Math.sign(avoidCy) * spanY * 0.05;
+    const cx = (view.minX + view.maxX) / 2 + shiftX;
+    const cy = (view.minY + view.maxY) / 2 + shiftY;
+    view = {
+      minX: cx - (spanX * grow) / 2,
+      maxX: cx + (spanX * grow) / 2,
+      minY: cy - (spanY * grow) / 2,
+      maxY: cy + (spanY * grow) / 2,
+    };
+  }
+  return view;
+}
+
+/** True when every stop and leg of the route is clear of the rect. */
+export function routeClearOf(
+  stops: Array<{ lon: number; lat: number }>,
+  view: AtlasBounds,
+  frame: AtlasRect,
+  avoid: AtlasRect,
+  margin = ROUTE_CLEARANCE,
+): boolean {
+  const points = stops.map((stop) => projectInBounds(stop.lon, stop.lat, view, frame));
+  return segmentSamples(points).every(
+    (point) =>
+      !hitsRect(point, avoid, margin) &&
+      point.x >= frame.x + 12 &&
+      point.x <= frame.x + frame.w - 12 &&
+      point.y >= frame.y + 12 &&
+      point.y <= frame.y + frame.h - 12,
+  );
+}

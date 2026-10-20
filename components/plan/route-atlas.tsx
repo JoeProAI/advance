@@ -5,9 +5,10 @@ import {
   ATLAS_HEIGHT,
   ATLAS_LAYOUT,
   ATLAS_WIDTH,
+  fitRouteView,
   projectInBounds,
-  routeViewBounds,
   statePathsInBounds,
+  type AtlasRect,
 } from "@/lib/geo/atlas";
 import type { RoutedStop } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,10 @@ type RouteAtlasProps = {
   className?: string;
   selectedOrder?: number | null;
   onSelect?: (stop: RoutedStop) => void;
+  /** Measured CSS size of the drawing box, so the view matches its aspect and nothing is cropped. */
+  frame?: { w: number; h: number };
+  /** Card drawn over the map (CONUS locator), in the same CSS pixels as `frame`. */
+  avoid?: AtlasRect;
 };
 
 function polyline(points: Array<{ x: number; y: number }>): string {
@@ -34,9 +39,23 @@ export function RouteAtlas({
   className,
   selectedOrder,
   onSelect,
+  frame,
+  avoid,
 }: RouteAtlasProps) {
-  const mapRect = ATLAS_LAYOUT.map;
-  const view = routeViewBounds(stops.map((stop) => stop.city));
+  const measured = frame && frame.w > 0 && frame.h > 0 ? frame : undefined;
+  const vbW = ATLAS_WIDTH;
+  const vbH = measured ? Math.round((ATLAS_WIDTH * measured.h) / measured.w) : ATLAS_HEIGHT;
+  const scale = measured ? ATLAS_WIDTH / measured.w : 1;
+  const mapRect: AtlasRect = measured ? { x: 0, y: 0, w: vbW, h: vbH } : ATLAS_LAYOUT.map;
+  const avoidRect: AtlasRect | undefined =
+    measured && avoid
+      ? { x: avoid.x * scale, y: avoid.y * scale, w: avoid.w * scale, h: avoid.h * scale }
+      : undefined;
+  const view = fitRouteView(
+    stops.map((stop) => stop.city),
+    mapRect,
+    avoidRect,
+  );
   const clipId = `atlas-map-${stops.map((stop) => stop.order).join("") || "empty"}`;
   const states = statePathsInBounds(view, mapRect);
 
@@ -53,7 +72,7 @@ export function RouteAtlas({
     <div className={cn("atlas-frame", className)}>
       <svg
         className="atlas-map"
-        viewBox={`0 0 ${ATLAS_WIDTH} ${ATLAS_HEIGHT}`}
+        viewBox={`0 0 ${vbW} ${vbH}`}
         width="100%"
         height="100%"
         role="img"
@@ -69,7 +88,7 @@ export function RouteAtlas({
             <rect x={mapRect.x} y={mapRect.y} width={mapRect.w} height={mapRect.h} />
           </clipPath>
         </defs>
-        <rect width={ATLAS_WIDTH} height={ATLAS_HEIGHT} fill={waterFill} />
+        <rect width={vbW} height={vbH} fill={waterFill} />
 
         {showBase ? (
           <g clipPath={`url(#${clipId})`} fillRule="evenodd">

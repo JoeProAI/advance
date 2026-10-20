@@ -40,7 +40,11 @@ export function StopBrief({ stop, onClose }: { stop: RoutedStop; onClose: () => 
                 ? "No local openers returned."
                 : stop.openers.map((opener) => (
                     <p key={opener.entityId}>
-                      {opener.name}, overlap {formatAffinity(opener.overlap)}. {opener.why}
+                      {opener.name},{" "}
+                      {typeof opener.overlap === "number"
+                        ? `overlap ${formatAffinity(opener.overlap)}`
+                        : `affinity ${formatAffinity(opener.affinity)}`}
+                      . {opener.why}
                     </p>
                   ))}
             </dd>

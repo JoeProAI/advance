@@ -28,8 +28,27 @@ function cachePath(key: string): string {
   return path.join(CACHE, `${prefix}-${digest}.json`);
 }
 
+type Bucket = { count: number; resetAt: number };
+
 export function createFileStore(): PlanStore {
+  // Local dev only: one process, so an in-memory window is enough.
+  const buckets = new Map<string, Bucket>();
   return {
+    kind: "file",
+    async rateLimit(key, limit, windowMs) {
+      const now = Date.now();
+      const current = buckets.get(key);
+      if (!current || current.resetAt <= now) {
+        buckets.set(key, { count: 1, resetAt: now + windowMs });
+        return { ok: true, retryAfterSec: Math.ceil(windowMs / 1000) };
+      }
+      const retryAfterSec = Math.ceil((current.resetAt - now) / 1000);
+      if (current.count >= limit) {
+        return { ok: false, retryAfterSec };
+      }
+      current.count += 1;
+      return { ok: true, retryAfterSec };
+    },
     async create(plan) {
       await ensure();
       await writeFile(planPath(plan.id), JSON.stringify(plan), "utf8");

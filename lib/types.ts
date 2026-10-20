@@ -55,7 +55,10 @@ export type OpenerPick = {
   kind: ActKind;
   affinity: number;
   popularity: number;
-  overlap: number;
+  /** Compare overlap. Only the lead opener per stop is compared. */
+  overlap?: number;
+  /** Qloo bio or birthplace names the stop city. */
+  local?: boolean;
   why: string;
 };
 
