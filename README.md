@@ -6,6 +6,17 @@ Working title lives in [`lib/config.ts`](lib/config.ts) (`APP_NAME`). Override w
 
 Built for the [Qloo Agentic Hackathon](https://qloo.devpost.com/) against the official kit ([qloo/qloo-hackathon-kit](https://github.com/qloo/qloo-hackathon-kit)). MIT licensed. Submission notes: [`docs/SUBMISSION.md`](docs/SUBMISSION.md).
 
+## Qloo-powered
+
+Every city, room, opener, podcast, bar, and brand in a live plan comes from the Qloo Taste AI API on the hackathon host (`https://hackathon.api.qloo.com`):
+
+- `/search` and `/entities` resolve the act.
+- `/v2/insights` with `filter.type=urn:heatmap` finds where the act's audience clusters across the lower 48.
+- `/v2/insights` for places (fixed venue and comedy-club tags), artists or comedians (openers), podcasts, bars, and brands fills each stop.
+- `/v2/insights/compare` scores headliner and opener audience overlap.
+
+Advance adds routing (drive caps, nearest-neighbor + 2-opt), honest labels when Qloo comes back thin, and the share page. The Qloo key stays on the server; no personal data is sent.
+
 ## 1. Product problem
 
 Bookers still guess the next city. Advance turns Qloo group-taste geography into a shareable run: cities first, then rooms, openers, and promo facts. Results describe where a crowd already clusters. They do not predict what any one person will do.
@@ -19,7 +30,7 @@ We do not spawn `qloo exec` or `qloo mcp` from the web app. A Vercel or serverle
 | Harness workflow | In Advance | Why it fits |
 |---|---|---|
 | `describe` | Yes | Resolve a public act name via `/search` + `/entities` |
-| `where_popular` | Yes | City heatmaps via `filter.type=urn:entity:destination` + `output.heatmap.boundary=city` |
+| `where_popular` | Yes | National heatmap via `filter.type=urn:heatmap`, cells snapped to tour cities |
 | `find_tags` | Yes | Music-venue / comedy-club tag ids from `/v2/tags` |
 | `recommend` | Yes | Rooms, openers, podcasts, bars, brands for that crowd |
 | `rank` | Yes | Affinity minus drive cost, nearest-neighbor + 2-opt |
@@ -32,13 +43,13 @@ Mapping source: [`lib/qloo/workflows.ts`](lib/qloo/workflows.ts). The desk radio
 
 ## 3. Request to result (redacted)
 
-Example: MJ Lenderman, 8 shows, 5h drive cap, first Friday about eight weeks out.
+Example: MJ Lenderman, 8 shows, 6h drive cap, first Friday about eight weeks out.
 
 1. `GET /search?query=MJ%20Lenderman&types=urn:entity:artist,urn:entity:person` then `GET /entities` → entity id (mock uses a synthetic UUID). Search always returns its closest hits, so Advance only routes an exact name match and otherwise answers "Did you mean".
 2. `GET /v2/insights?filter.type=urn:heatmap&filter.location=POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))&signal.interests.entities=<id>` → one national grid of unnamed geohash cells. Each cell snaps to the nearest tour city within 40 miles; a city scores its best cell's affinity × popularity. One call keeps every city on the same scale. (`output.heatmap.boundary=city` answers 400 on the hackathon host, and free-text regions resolve unpredictably, so neither is used.)
-3. Local rank under the drive cap → ordered stops (Pittsburgh → …).
+3. Local rank under the drive cap → ordered stops (Chicago → Milwaukee → …).
 4. Place insights in each city with a fixed tag (`urn:tag:category:place:live_music_venue` or `urn:tag:genre:place:comedy_club`) and the act as signal. Qloo has no capacity field, so room size comes only from Qloo tags (Intimate, Cozy, Concert hall, Performing arts theater) and reads "Size unknown" otherwise.
-5. Artist or person insights capped at the headliner's popularity + `/v2/insights/compare` → opener shortlist. Overlap is the mean of the top five shared tag scores (compare returns no single overlap number).
+5. One artist or person insights call per plan, capped at the headliner's popularity, then `/v2/insights/compare` for each stop's lead opener. Overlap is the mean of the top five shared tag scores (compare returns no single overlap number). See "Openers" below.
 6. Tag / podcast / place / brand insights → promo brief. Routing is ours, not Qloo.
 
 No user name, email, device id, or account id is sent. Inputs are a public act name and optional start city. `.env.example` keeps `QLOO_API_KEY` empty. Live responses are cached only on the server (`.data/`, gitignored, or the Convex `qlooCache` table when deployed).
@@ -47,10 +58,7 @@ No user name, email, device id, or account id is sent. Inputs are a public act n
 
 Judge path: open the app, click one of the three tickets, or type any name. No signup. First date defaults to about eight weeks out (a Friday). A map and stop list should land in well under 30 seconds in mock mode. The atlas draws the route even if map tiles are blocked.
 
-Screenshots (synthetic acts, no credentials, no personal data):
-
-- [Landing](docs/demo/landing.png)
-- [Finished plan](docs/demo/plan.png)
+Screenshots of live plans (no credentials, no personal data): [`docs/demo/`](docs/demo/).
 
 ## 5. Setup from a clean environment
 
@@ -99,7 +107,7 @@ qloo exec find_tags --input '{"query":"music venue","limit":3}'
 - It does not say a named person will attend, buy, or like a show.
 - It does not infer identity, health, politics, credit, or employment.
 - Heatmap cities are aggregate affinity, not ticket counts.
-- Room size is an estimate from popularity, labeled as an estimate.
+- Room size comes only from Qloo tags (Intimate, Concert hall, and so on). Without one the stop reads "Size unknown". Qloo has no capacity field.
 - Mock fixtures in [`lib/qloo/fixtures.ts`](lib/qloo/fixtures.ts) are hand-written synthetic data. They are not copies of live Qloo responses. This repo will be public, so no real Qloo payload is committed.
 - Live coverage can be thin. The desk leaves a Hold on the room instead of inventing one.
 - OpenRouter, when present, only rewrites facts already returned by Qloo.
