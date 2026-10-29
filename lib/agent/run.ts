@@ -15,6 +15,7 @@ import {
 } from "@/lib/qloo/parse";
 import { PLACE_TAGS, cityHeatmapParams } from "@/lib/qloo/request";
 import { withDeadline } from "@/lib/qloo/deadline";
+import { withPurpose, withTrace, type QlooCallReceipt } from "@/lib/qloo/trace";
 import { assignOpeners, openerPopularityCap, rejectOpener, type AssignedOpener } from "@/lib/agent/openers";
 import { harnessLabel } from "@/lib/qloo/workflows";
 import type { QlooEntitiesResponse, QlooEntity } from "@/lib/qloo/types";
@@ -273,9 +274,11 @@ async function promoFacts(
   act: ResolvedAct,
   locationQuery: string,
   sharedTags: string[],
-): Promise<{ podcasts: string[]; bars: string[]; brands: string[]; tags: string[] }> {
+): Promise<{ podcasts: string[]; bars: string[]; brands: string[]; tags: string[]; entityIds: string[] }> {
   const names = (raw: Awaited<ReturnType<Client["insights"]>>) =>
     isHeatmapResponse(raw) ? [] : raw.results.entities.map((entity) => entity.name);
+  const ids = (raw: Awaited<ReturnType<Client["insights"]>>) =>
+    isHeatmapResponse(raw) ? [] : raw.results.entities.map((entity) => entity.entity_id);
   const empty: QlooEntitiesResponse = { success: true, results: { entities: [] } };
   const soft = (promise: ReturnType<Client["insights"]>) =>
     promise.catch((error: unknown) => {
@@ -316,6 +319,7 @@ async function promoFacts(
     bars: names(barsRaw),
     brands: names(brandsRaw),
     tags: sharedTags,
+    entityIds: [...ids(podcastsRaw), ...ids(barsRaw), ...ids(brandsRaw)],
   };
 }
 
@@ -332,11 +336,13 @@ async function loadBaseline(client: Client): Promise<Baseline | null> {
   if (cached && typeof cached === "object" && Array.isArray((cached as Baseline).panel)) {
     return cached as Baseline;
   }
-  const settled = await Promise.allSettled(
-    REFERENCE_PANEL.map(async (member): Promise<{ name: string; cities: CandidateCity[] }> => {
-      const raw = await client.insights(cityHeatmapParams({ entityId: member.entityId }));
-      return { name: member.name, cities: isHeatmapResponse(raw) ? cellsToCities(raw.results.heatmap) : [] };
-    }),
+  const settled = await withPurpose("baseline", () =>
+    Promise.allSettled(
+      REFERENCE_PANEL.map(async (member): Promise<{ name: string; cities: CandidateCity[] }> => {
+        const raw = await client.insights(cityHeatmapParams({ entityId: member.entityId }));
+        return { name: member.name, cities: isHeatmapResponse(raw) ? cellsToCities(raw.results.heatmap) : [] };
+      }),
+    ),
   );
   const panel = settled
     .map((result) => (result.status === "fulfilled" ? result.value : null))
@@ -409,12 +415,13 @@ async function softly<T>(emit: Emit, label: string, fallback: T, run: () => Prom
   }
 }
 
-export function runTourAgent(
+export async function runTourAgent(
   request: PlanRequest,
   hooks: RunHooks = {},
   budgetMs = AGENT_BUDGET_MS,
 ): Promise<Omit<TourPlan, "id" | "createdAt" | "updatedAt">> {
-  return withDeadline(budgetMs, () => runWithinDeadline(request, hooks));
+  const traced = await withTrace(() => withDeadline(budgetMs, () => runWithinDeadline(request, hooks)));
+  return attachReceipts(traced.value, traced.calls);
 }
 
 async function runWithinDeadline(
@@ -668,7 +675,8 @@ async function runWithinDeadline(
 
   let thin = scored.length < request.showCount;
   const stops: RoutedStop[] = await Promise.all(
-    routed.cities.map(async (city, i): Promise<RoutedStop> => {
+    routed.cities.map(async (city, i): Promise<RoutedStop> =>
+      withPurpose(`stop:${cityKey(city)}`, async (): Promise<RoutedStop> => {
       // "Washington" alone resolved outside DC and "Richmond" can land in
       // California, so every location query carries the state.
       const where = cityKey(city);
@@ -688,7 +696,7 @@ async function runWithinDeadline(
         softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
           scoreOpeners(client, act, city.name, assignments[i] ?? []),
         ),
-        softly(emit, `Promo for ${city.name}`, { podcasts: [], bars: [], brands: [], tags: sharedTags }, () =>
+        softly(emit, `Promo for ${city.name}`, { podcasts: [], bars: [], brands: [], tags: sharedTags, entityIds: [] }, () =>
           promoFacts(client, act, where, sharedTags),
         ),
       ]);
@@ -727,8 +735,23 @@ async function runWithinDeadline(
         brief,
         driveHoursFromPrev: city.driveHoursFromPrev,
         milesFromPrev: city.milesFromPrev,
+        receipt: {
+          heat: {
+            geohash: city.geohash,
+            cellAffinity: city.cellAffinity,
+            cellPopularity: city.popularity,
+            affinityRank: city.affinityRank,
+            cityScore: city.affinity,
+            baseline: city.baseline,
+            lift: city.lift,
+            routeScore: city.score,
+          },
+          callNs: [],
+          promoEntityIds: promo.entityIds ?? [],
+        },
       };
-    }),
+      }),
+    ),
   );
 
   const route: RoutedTour = {
@@ -762,4 +785,64 @@ async function runWithinDeadline(
       baselineLoaded: Boolean(baseline.value),
     },
   };
+}
+
+/**
+ * Tie the recorded Qloo calls to the plan. Every call inside the run lands on
+ * plan.receipts; each stop's calls are the ones recorded under purpose
+ * "stop:<city key>". `invented` counts named entity IDs on the sheet that no
+ * Qloo call ever returned: it must be 0.
+ */
+export function attachReceipts(
+  plan: Omit<TourPlan, "id" | "createdAt" | "updatedAt">,
+  calls: QlooCallReceipt[],
+): Omit<TourPlan, "id" | "createdAt" | "updatedAt"> {
+  const totals = { calls: calls.length, live: 0, cache: 0, shared: 0, mock: 0, errors: 0, ms: 0 };
+  for (const call of calls) {
+    totals.ms += call.ms;
+    if (call.source === "error") {
+      totals.errors += 1;
+    } else {
+      totals[call.source] += 1;
+    }
+  }
+
+  const byPurpose = new Map<string, number[]>();
+  const seen = new Set<string>();
+  for (const call of calls) {
+    const list = byPurpose.get(call.purpose) ?? [];
+    list.push(call.n);
+    byPurpose.set(call.purpose, list);
+    for (const id of call.entityIds) {
+      seen.add(id);
+    }
+  }
+
+  const named: string[] = [];
+  if (plan.act?.entityId) {
+    named.push(plan.act.entityId);
+  }
+  const stops = plan.route?.stops ?? [];
+  for (const stop of stops) {
+    if (stop.receipt) {
+      stop.receipt.callNs = byPurpose.get(`stop:${cityKey(stop.city)}`) ?? [];
+    }
+    if (stop.venue.entityId && stop.venue.entityId !== "thin") {
+      named.push(stop.venue.entityId);
+    }
+    for (const opener of stop.openers) {
+      named.push(opener.entityId);
+    }
+    for (const id of stop.receipt?.promoEntityIds ?? []) {
+      named.push(id);
+    }
+  }
+
+  plan.receipts = {
+    calls,
+    totals,
+    invented: named.filter((id) => !seen.has(id)).length,
+    checkedEntities: named.length,
+  };
+  return plan;
 }
