@@ -127,7 +127,7 @@ describe("tour agent against live-shaped responses", () => {
     expect(plan.act?.trend).toBeUndefined();
     expect(plan.steps.some((step) => step.title === "Checking momentum")).toBe(false);
     expect(calls.some((call) => call.startsWith("/trends"))).toBe(false);
-    expect(calls.filter((call) => call.includes("urn:heatmap"))).toHaveLength(1);
+    expect(calls.filter((call) => call.includes("urn:heatmap"))).toHaveLength(13); // act heatmap + 12 panel baselines
     const cities = plan.route!.stops.map((stop) => stop.city.name);
     expect(cities).toContain("Chicago");
     const stop = plan.route!.stops[0]!;
