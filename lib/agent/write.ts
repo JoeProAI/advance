@@ -7,7 +7,12 @@ export type BriefFacts = {
   city: string;
   venue: string;
   venueWhy: string;
-  openers: Array<{ name: string; overlap: number; why: string }>;
+  openers: Array<{
+    name: string;
+    sharedTagCount?: number;
+    sharedTags?: Array<{ name: string; score: number }>;
+    why: string;
+  }>;
   podcasts: string[];
   bars: string[];
   brands: string[];
@@ -17,7 +22,13 @@ export type BriefFacts = {
 
 function fallbackBrief(facts: BriefFacts): PromoBrief {
   const topOpener = facts.openers[0];
-  const overlap = topOpener ? topOpener.overlap.toFixed(2) : "n/a";
+  const tagProof = topOpener
+    ? typeof topOpener.sharedTagCount === "number"
+      ? `${topOpener.sharedTagCount} shared taste tags${
+          topOpener.sharedTags?.length ? ` (${topOpener.sharedTags.slice(0, 2).map((tag) => tag.name).join(", ")})` : ""
+        }`
+      : "same taste neighborhood"
+    : "";
   const audience =
     facts.tags.length > 0
       ? `Taste tags that travel with ${facts.act.name}: ${facts.tags.join(", ")}. City affinity ${facts.affinity.toFixed(2)}.`
@@ -26,7 +37,8 @@ function fallbackBrief(facts: BriefFacts): PromoBrief {
     audience,
     podcasts: facts.podcasts.map((name) => ({
       name,
-      why: `Local listen that indexes with this crowd.`,
+      // Qloo does not mark podcasts as local. Say what the signal actually is.
+      why: `Ranked by Qloo for this act's audience, with ${facts.city} as the location signal.`,
     })),
     bars: facts.bars.map((name) => ({
       name,
@@ -34,10 +46,10 @@ function fallbackBrief(facts: BriefFacts): PromoBrief {
     })),
     brands: facts.brands.map((name) => ({
       name,
-      why: `Brand adjacency from the same taste neighborhood.`,
+      why: `Ranked by Qloo for this act's audience, with ${facts.city} as the location signal.`,
     })),
     socialPost: `${facts.city}. ${facts.act.name} at ${facts.venue}. ${
-      topOpener ? `With ${topOpener.name} (audience overlap ${overlap}). ` : ""
+      topOpener ? `With ${topOpener.name} (${tagProof}). ` : ""
     }Routed for the crowd that already gathers here.`,
   };
 }

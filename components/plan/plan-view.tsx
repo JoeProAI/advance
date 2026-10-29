@@ -151,6 +151,9 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
                     </td>
                     <td className="border-b border-[var(--color-line)] py-3 pr-3 font-mono text-sm">
                       {stop.date}
+                      {stop.dateNote ? (
+                        <span className="block text-[var(--color-warning)]">{stop.dateNote}</span>
+                      ) : null}
                       {stop.order > 1 ? (
                         <span className="block text-[var(--color-muted)]">
                           {formatHours(stop.driveHoursFromPrev)} / {formatMiles(stop.milesFromPrev)}

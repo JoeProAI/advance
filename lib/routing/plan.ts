@@ -281,6 +281,23 @@ export function defaultTourStartDate(from: Date = new Date()): string {
 }
 
 export function assignDates(stopCount: number, startDate?: string, restEvery = 3): string[] {
+  return assignDatesDetailed(stopCount, startDate, restEvery).dates;
+}
+
+const MONTH_DAY: Record<string, string> = {
+  "07-04": "Jul 4",
+  "12-24": "Dec 24",
+  "12-25": "Dec 25",
+  "12-31": "Dec 31",
+  "01-01": "Jan 1",
+};
+
+/** Dates plus a note for any night that slid off a blackout date. */
+export function assignDatesDetailed(
+  stopCount: number,
+  startDate?: string,
+  restEvery = 3,
+): { dates: string[]; notes: Array<string | undefined> } {
   const start = startDate
     ? new Date(`${startDate}T12:00:00Z`)
     : new Date(`${defaultTourStartDate()}T12:00:00Z`);
@@ -288,19 +305,28 @@ export function assignDates(stopCount: number, startDate?: string, restEvery = 3
     throw new Error("startDate must be YYYY-MM-DD");
   }
   const dates: string[] = [];
+  const notes: Array<string | undefined> = [];
   const cursor = new Date(start);
   for (let i = 0; i < stopCount; i += 1) {
     // Never put a show on a holiday; slide to the next open night.
+    const first = cursor.toISOString().slice(0, 10);
     while (isBlackoutDate(cursor.toISOString().slice(0, 10))) {
       cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
-    dates.push(cursor.toISOString().slice(0, 10));
+    const settled = cursor.toISOString().slice(0, 10);
+    if (settled !== first) {
+      const label = MONTH_DAY[first.slice(5)] ?? (first === thanksgiving(Number(first.slice(0, 4))) ? "Thanksgiving" : first);
+      notes.push(`moved off ${label}`);
+    } else {
+      notes.push(undefined);
+    }
+    dates.push(settled);
     cursor.setUTCDate(cursor.getUTCDate() + 1);
     if ((i + 1) % restEvery === 0 && i < stopCount - 1) {
       cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
   }
-  return dates;
+  return { dates, notes };
 }
 
 export function nextFriday(from: Date): Date {

@@ -132,7 +132,8 @@ describe("tour agent against live-shaped responses", () => {
     expect(cities).toContain("Chicago");
     const stop = plan.route!.stops[0]!;
     expect(stop.venue.estimatedRoom).toMatch(/^Small room \(Qloo tag: Intimate\)/);
-    expect(stop.openers[0]?.overlap).toBeCloseTo(0.8, 5);
+    expect(stop.openers[0]?.sharedTagCount).toBe(1);
+    expect(stop.openers[0]?.sharedTags?.[0]?.score).toBeCloseTo(0.8, 5);
   });
 
   it("degrades a non-auth venue failure to a held room instead of failing the plan", async () => {
@@ -156,7 +157,7 @@ describe("tour agent against live-shaped responses", () => {
     expect(calls.filter((call) => call.startsWith("/v2/insights/compare"))).toHaveLength(leads.size);
     const firstStop = stops.slice(0, 1).flatMap((stop) => stop.openers.map((o) => o.name));
     expect(new Set(firstStop).size).toBe(firstStop.length);
-    expect(stops[0]!.openers[1]?.overlap).toBeUndefined();
+    expect(stops[0]!.openers[1]?.sharedTagCount).toBeUndefined();
   });
 
   it("stays inside the run budget when Qloo hangs", async () => {
@@ -184,5 +185,26 @@ describe("tour agent against live-shaped responses", () => {
       vi.fn(async () => new Response("unauthorized", { status: 401 })),
     );
     await expect(runTourAgent(request("Test Band Unauthorized"))).rejects.toThrow(/Qloo key/);
+  });
+});
+
+describe("swap loop", () => {
+  beforeEach(() => {
+    vi.stubEnv("QLOO_MODE", "mock");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("swaps a stadium-only city for the next best market", async () => {
+    const plan = await runTourAgent({ ...request("Stadium Test Act"), showCount: 4 });
+    expect(plan.status).toBe("ready");
+    const cities = plan.route!.stops.map((stop) => stop.city.name);
+    expect(cities).not.toContain("Chicago");
+    expect(plan.swaps?.some((swap) => swap.city === "Chicago, IL")).toBe(true);
+    expect(plan.steps.some((step) => /Swapped Chicago, IL/.test(step.detail))).toBe(true);
+    expect(plan.route!.stops.every((stop) => stop.venue.name !== "Hold")).toBe(true);
+    expect(plan.route!.stops.every((stop) => !/stadium/i.test(stop.venue.name))).toBe(true);
   });
 });

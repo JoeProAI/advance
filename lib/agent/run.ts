@@ -1,5 +1,5 @@
 import { cityKey, findCity } from "@/lib/geo/cities";
-import { pickByTier, roomSize } from "@/lib/agent/rooms";
+import { pickByTier, roomSize, wrongRoom } from "@/lib/agent/rooms";
 import { createQlooClient, isHeatmapResponse } from "@/lib/qloo/client";
 import { isAuthOrTypeError } from "@/lib/qloo/errors";
 import {
@@ -15,10 +15,10 @@ import {
 } from "@/lib/qloo/parse";
 import { PLACE_TAGS, cityHeatmapParams } from "@/lib/qloo/request";
 import { withDeadline } from "@/lib/qloo/deadline";
-import { assignOpeners, rejectOpener, type AssignedOpener } from "@/lib/agent/openers";
+import { assignOpeners, openerPopularityCap, rejectOpener, type AssignedOpener } from "@/lib/agent/openers";
 import { harnessLabel } from "@/lib/qloo/workflows";
 import type { QlooEntitiesResponse, QlooEntity } from "@/lib/qloo/types";
-import { assignDates, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
+import { assignDatesDetailed, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
 import { createId } from "@/lib/utils";
 import { resolveWriter, writeBrief, writeSummary } from "@/lib/agent/write";
 import type {
@@ -125,7 +125,19 @@ function holdVenue(cityName: string, why: string): VenuePick {
   };
 }
 
-async function pickVenue(client: Client, act: ResolvedAct, city: City, request: PlanRequest): Promise<VenuePick> {
+export type VenueCheck = {
+  venue: VenuePick;
+  /** False when the call worked but no bookable room exists in the market. */
+  usable: boolean;
+  /** Why the city cannot be booked (drives the swap loop and the board note). */
+  reason?: string;
+};
+
+function emptyVenueCheck(cityName: string, reason: string): VenueCheck {
+  return { venue: holdVenue(cityName, reason), usable: false, reason };
+}
+
+async function pickVenue(client: Client, act: ResolvedAct, city: City, request: PlanRequest): Promise<VenueCheck> {
   const cityName = city.name;
   const tagId = act.kind === "person" ? PLACE_TAGS.comedyClub : PLACE_TAGS.musicVenue;
   const raw = await client.insights({
@@ -136,32 +148,50 @@ async function pickVenue(client: Client, act: ResolvedAct, city: City, request: 
     "feature.explainability": true,
     take: 8,
   });
-  // Location queries are fuzzy; drop rooms that sit outside the market.
-  const entities = (isHeatmapResponse(raw) ? [] : raw.results.entities).filter((entity) =>
-    withinMiles(entity, city, VENUE_RADIUS_MILES),
-  );
+  // Location queries are fuzzy; drop rooms that sit outside the market, and
+  // drop rooms that are not bookable rooms at all (stadiums, orchestras,
+  // record stores, museums all surfaced live in the Oct 29 audit).
+  const dropped: string[] = [];
+  const entities = (isHeatmapResponse(raw) ? [] : raw.results.entities).filter((entity) => {
+    if (!withinMiles(entity, city, VENUE_RADIUS_MILES)) {
+      return false;
+    }
+    const why = wrongRoom(entity);
+    if (why) {
+      dropped.push(`${entity.name} (${why})`);
+      return false;
+    }
+    return true;
+  });
   const entity = pickByTier(entities, request.budgetTier);
   if (!entity) {
-    return holdVenue(cityName, "Qloo returned no venue-tagged places for this city.");
+    const reason =
+      dropped.length > 0
+        ? `only unusable rooms came back: ${dropped.slice(0, 3).join(", ")}`
+        : "Qloo returned no venue-tagged places for this city";
+    return emptyVenueCheck(cityName, `${reason}.`);
   }
   return {
-    entityId: entity.entity_id,
-    name: entity.name,
-    city: cityName,
-    affinity: asNumber(entity.query?.affinity, 0),
-    popularity: entityPopularity(entity, 0),
-    estimatedRoom: roomSize(entity).label,
-    why: explain(entity, act, cityName),
-    tags: entityTags(entity).map((tag) => tag.name),
+    usable: true,
+    venue: {
+      entityId: entity.entity_id,
+      name: entity.name,
+      city: cityName,
+      affinity: asNumber(entity.query?.affinity, 0),
+      popularity: entityPopularity(entity, 0),
+      estimatedRoom: roomSize(entity).label,
+      why: explain(entity, act, cityName),
+      tags: entityTags(entity).map((tag) => tag.name),
+    },
   };
 }
 
 /** Tour-wide opener pool: one call, then plausibility filtering. */
 async function openerPool(client: Client, act: ResolvedAct): Promise<{ pool: QlooEntity[]; dropped: string[] }> {
   const type = act.kind === "person" ? "urn:entity:person" : "urn:entity:artist";
-  // Openers should draw less than the headliner, so cap at the act's own
-  // popularity percentile.
-  const cap = Math.max(0.3, Math.min(0.99, act.popularity));
+  // Openers need headroom below the headliner: twice the headliner's distance
+  // from the top of Qloo's popularity percentile, or peers leak in as support.
+  const cap = openerPopularityCap(act.popularity);
   const raw = await client.insights({
     "filter.type": type,
     "signal.interests.entities": act.entityId,
@@ -197,14 +227,20 @@ async function scoreOpeners(
   return assigned.map(({ entity, local, repeat }, index) => {
     const affinity = asNumber(entity.query?.affinity, 0);
     const result = index === 0 ? compared?.results : undefined;
-    const overlap = index === 0 ? (result?.overlap ?? 0) : undefined;
-    const shared = result?.shared_tags?.slice(0, 2).join(", ");
+    // Compare scores are quantized (0.7309 repeated at all 8 Morril stops in
+    // the audit), so the mean reads as fake precision. The shared-tag count
+    // and the top tags are the honest evidence.
+    const sharedCount = index === 0 ? result?.shared_count : undefined;
+    const scoredTags = index === 0 ? result?.scored_tags?.slice(0, 3) : undefined;
+    const sharedLine =
+      typeof sharedCount === "number"
+        ? `${sharedCount} shared tags${scoredTags?.length ? `: ${scoredTags.map((tag) => tag.name).join(", ")}` : ""}`
+        : undefined;
     const parts = [
-      typeof overlap === "number" ? `overlap ${overlap.toFixed(2)}` : undefined,
       `affinity ${affinity.toFixed(2)}`,
       local ? `Qloo bio names ${cityName}` : undefined,
       repeat ? "also on an earlier date" : undefined,
-      shared ? `shares ${shared}` : entityDescription(entity) || undefined,
+      sharedLine ?? (entityDescription(entity) || undefined),
     ].filter(Boolean);
     return {
       entityId: entity.entity_id,
@@ -212,7 +248,8 @@ async function scoreOpeners(
       kind: entityKind(entity, act.kind),
       affinity,
       popularity: entityPopularity(entity, 0),
-      ...(typeof overlap === "number" ? { overlap } : {}),
+      ...(typeof sharedCount === "number" ? { sharedTagCount: sharedCount } : {}),
+      ...(scoredTags?.length ? { sharedTags: scoredTags } : {}),
       local,
       why: `${entity.name} for ${cityName}: ${parts.join(" · ")}`,
     };
@@ -360,11 +397,16 @@ async function runWithinDeadline(
       ),
     );
   }
+  const actBio =
+    typeof (entity.properties as { biography?: unknown } | undefined)?.biography === "string"
+      ? (entity.properties as { biography: string }).biography
+      : undefined;
   const act: ResolvedAct = {
     entityId: entity.entity_id,
     name: entity.name,
     kind: entityKind(entity, entityKind(hit, request.kindHint ?? "artist")),
     description: entityDescription(entity),
+    ...(actBio ? { bio: actBio } : {}),
     popularity: entityPopularity(entity, entityPopularity(hit, 0.5)),
     ...(trend.results.available
       ? {
@@ -413,13 +455,79 @@ async function runWithinDeadline(
     ),
   );
   const home = request.homeCity ? findCity(request.homeCity) : undefined;
-  const routed = selectAndRoute({
-    candidates,
+
+  // Venue calls are cached per city so the swap loop never re-asks Qloo for
+  // a market it already checked.
+  const venueChecks = new Map<string, Promise<VenueCheck>>();
+  const venueFor = (city: City): Promise<VenueCheck> => {
+    const key = cityKey(city);
+    let pending = venueChecks.get(key);
+    if (!pending) {
+      pending = pickVenue(client, act, city, request);
+      venueChecks.set(key, pending);
+    }
+    return pending;
+  };
+
+  // Route, check rooms, swap cities with no bookable room for the next best
+  // candidate, up to three rounds. Dates come after the final route.
+  const droppedCities = new Set<string>();
+  const swaps: Array<{ city: string; reason: string }> = [];
+  const venueResults = new Map<string, VenueCheck>();
+  let routed = selectAndRoute({
+    candidates: candidates.filter((city) => !droppedCities.has(cityKey(city))),
     showCount: request.showCount,
     maxDriveHours: request.maxDriveHours,
     homeCity: home,
   });
-  const dates = assignDates(routed.cities.length, request.startDate);
+  for (let round = 0; round < 3; round += 1) {
+    const failedCheck = (city: City): VenueCheck => ({
+      // A failed call is not proof of no room, so it holds instead of swapping.
+      venue: holdVenue(city.name, "Qloo venue call failed for this city."),
+      usable: true,
+    });
+    const checks = await Promise.all(
+      routed.cities.map((city) =>
+        softly(emit, `Venues in ${city.name}`, failedCheck(city), () => venueFor(city)),
+      ),
+    );
+    checks.forEach((check, index) => {
+      venueResults.set(cityKey(routed.cities[index]!), check.value);
+    });
+    const unusable = routed.cities.filter((city) => {
+      const check = venueResults.get(cityKey(city));
+      return check && !check.usable;
+    });
+    if (unusable.length === 0) {
+      break;
+    }
+    // Never swap a city when losing it would leave the run short.
+    const remaining = candidates.filter((city) => !droppedCities.has(cityKey(city)));
+    if (remaining.length - unusable.length < request.showCount) {
+      break;
+    }
+    const before = new Set(routed.cities.map(cityKey));
+    for (const city of unusable) {
+      droppedCities.add(cityKey(city));
+      const reason = venueResults.get(cityKey(city))?.reason ?? "no usable room";
+      swaps.push({ city: cityKey(city), reason });
+    }
+    routed = selectAndRoute({
+      candidates: candidates.filter((city) => !droppedCities.has(cityKey(city))),
+      showCount: request.showCount,
+      maxDriveHours: request.maxDriveHours,
+      homeCity: home,
+    });
+    const replacements = routed.cities.filter((city) => !before.has(cityKey(city)));
+    for (const swap of swaps.slice(-unusable.length)) {
+      const into = replacements.map((city) => cityKey(city)).join(" and ");
+      await emit(
+        step("Swapped a city", `Swapped ${swap.city}${into ? ` for ${into}` : " out"}: ${swap.reason}`),
+      );
+    }
+  }
+  const datePlan = assignDatesDetailed(routed.cities.length, request.startDate);
+  const dates = datePlan.dates;
 
   await emit(
     step(
@@ -466,10 +574,12 @@ async function runWithinDeadline(
           `GET /v2/insights + /v2/insights/compare · ${harnessLabel("recommend")}`,
         ),
       );
-      const [venueRun, openersRun, promoRun] = await Promise.all([
-        softly(emit, `Venues in ${city.name}`, holdVenue(city.name, "Qloo venue call failed for this city."), () =>
-          pickVenue(client, act, city, request),
-        ),
+      // The venue check already ran inside the swap loop; reuse it.
+      const [venue, openersRun, promoRun] = await Promise.all([
+        venueResults.get(cityKey(city))?.venue ??
+          softly(emit, `Venues in ${city.name}`, emptyVenueCheck(city.name, "Qloo venue call failed for this city."), () =>
+            venueFor(city),
+          ).then((check) => check.value.venue),
         softly(emit, `Openers in ${city.name}`, [] as OpenerPick[], () =>
           scoreOpeners(client, act, city.name, assignments[i] ?? []),
         ),
@@ -477,7 +587,6 @@ async function runWithinDeadline(
           promoFacts(client, act, where, sharedTags),
         ),
       ]);
-      const venue = venueRun.value;
       const openers = openersRun.value;
       if (venue.entityId === "thin" || openersRun.failed || openers.length === 0) {
         thin = true;
@@ -488,7 +597,12 @@ async function runWithinDeadline(
         city: city.name,
         venue: venue.name,
         venueWhy: venue.why,
-        openers: openers.map((opener) => ({ ...opener, overlap: opener.overlap ?? opener.affinity })),
+        openers: openers.map((opener) => ({
+          name: opener.name,
+          sharedTagCount: opener.sharedTagCount,
+          sharedTags: opener.sharedTags,
+          why: opener.why,
+        })),
         podcasts: promo.podcasts,
         bars: promo.bars,
         brands: promo.brands,
@@ -498,12 +612,13 @@ async function runWithinDeadline(
       return {
         order: i + 1,
         date: dates[i]!,
+        ...(datePlan.notes[i] ? { dateNote: datePlan.notes[i]! } : {}),
         city,
         affinity: city.affinity,
         affinityRank: city.affinityRank,
         venue,
         openers,
-        overlap: openers[0]?.overlap ?? 0,
+        overlap: 0,
         brief,
         driveHoursFromPrev: city.driveHoursFromPrev,
         milesFromPrev: city.milesFromPrev,
@@ -533,5 +648,6 @@ async function runWithinDeadline(
     qlooMode: client.mode,
     writer,
     thinData: thin,
+    ...(swaps.length ? { swaps } : {}),
   };
 }

@@ -30,6 +30,8 @@ export type ResolvedAct = {
   name: string;
   kind: ActKind;
   description: string;
+  /** Qloo `properties.biography` on the act record, used for related-act checks. */
+  bio?: string;
   popularity: number;
   trend?: {
     available: boolean;
@@ -77,11 +79,14 @@ export type PromoBrief = {
 export type RoutedStop = {
   order: number;
   date: string;
+  /** Set when the date slid off a holiday, e.g. "moved off Dec 25". */
+  dateNote?: string;
   city: City;
   affinity: number;
   affinityRank: number;
   venue: VenuePick;
   openers: OpenerPick[];
+  /** @deprecated kept for stored plans; compare overlap was fake precision. */
   overlap: number;
   brief: PromoBrief;
   driveHoursFromPrev: number;

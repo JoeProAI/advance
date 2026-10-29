@@ -65,3 +65,27 @@ describe("assigning openers across the run", () => {
     expect(plan[1]![1]!.repeat).toBe(true);
   });
 });
+
+describe("opener headroom cap", () => {
+  it("caps openers at twice the headliner's distance from the top", async () => {
+    const { openerPopularityCap } = await import("@/lib/agent/openers");
+    // Lenderman at 0.965 -> cap 0.930, which drops Wednesday at 0.964.
+    expect(openerPopularityCap(0.965)).toBeCloseTo(0.93, 3);
+    expect(openerPopularityCap(0.5)).toBeCloseTo(0.05, 3); // floor
+    expect(rejectOpener(artist("Peer", {}, 0.964), { ...act, popularity: 0.965 }, 2026)).toBe("peer-draw");
+  });
+});
+
+describe("related acts", () => {
+  it("flags openers whose bio names the headliner, and family names", async () => {
+    const { isRelatedAct } = await import("@/lib/agent/openers");
+    const lenderman = { name: "MJ Lenderman", description: "Asheville songwriter.", bio: "MJ Lenderman also plays in the band Wednesday." };
+    const wednesday = artist("wed", { biography: "Wednesday is an Asheville band featuring MJ Lenderman." });
+    expect(isRelatedAct(wednesday, lenderman)).toBe(true);
+    const waxahatchee = { name: "Waxahatchee", description: "Waxahatchee is Katie Crutchfield." };
+    const allison = { entity_id: "ac", name: "Allison Crutchfield", popularity: 0.8, properties: { biography: "Alabama songwriter." } } as unknown as Parameters<typeof isRelatedAct>[0];
+    expect(isRelatedAct(allison, waxahatchee)).toBe(true);
+    const stranger = artist("ratboys", { biography: "Ratboys formed in Chicago." });
+    expect(isRelatedAct(stranger, lenderman)).toBe(false);
+  });
+});
