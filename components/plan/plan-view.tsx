@@ -105,6 +105,9 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
             >
               {copied ? "Link on the stub" : "Copy share link"}
             </Button>
+            <Link href={`/plan/${plan.id}/packet`} className="desk-link">
+              <Button variant="carbon">Advance packet</Button>
+            </Link>
             <a href={`/api/plans/${plan.id}/csv`} className="desk-link">
               <Button variant="ghost">Export CSV</Button>
             </a>

@@ -194,6 +194,8 @@ async function pickVenue(client: Client, act: ResolvedAct, city: City, request: 
       affinity: asNumber(entity.query?.affinity, 0),
       popularity: entityPopularity(entity, 0),
       estimatedRoom: roomSize(entity).label,
+      size: roomSize(entity).size,
+      priceLevel: entity.properties?.price_level,
       why: explain(entity, act, cityName),
       tags: entityTags(entity).map((tag) => tag.name),
     },
