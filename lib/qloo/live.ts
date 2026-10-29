@@ -14,6 +14,7 @@ import { validateInsightsParams } from "@/lib/qloo/validate";
 import { overlapFromCompare, parseEntityList, parseHeatmapCells, parseTags } from "@/lib/qloo/parse";
 import { getPlanStore } from "@/lib/storage";
 import { compactQlooPayload } from "@/lib/qloo/compact";
+import { recordCall, summarizePayload, type QlooCallSource } from "@/lib/qloo/trace";
 import {
   QLOO_MIN_CALL_MS,
   QlooDeadlineError,
@@ -62,6 +63,27 @@ function send(built: ReturnType<typeof buildQlooRequest>): Promise<Response> {
 }
 
 async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
+  const startedAt = Date.now();
+  const params = Object.fromEntries(search.entries());
+  const note = (source: QlooCallSource, payload: unknown, extra: { httpStatus?: number; error?: string } = {}) =>
+    recordCall({ path, params, source, ms: Date.now() - startedAt, ...summarizePayload(payload), ...extra });
+  try {
+    const { payload, source, httpStatus } = await qlooFetchInner(path, search);
+    note(source, payload, { httpStatus });
+    return payload as T;
+  } catch (error) {
+    note("error", null, {
+      httpStatus: error instanceof QlooHttpError ? error.status : undefined,
+      error: error instanceof Error ? error.message.slice(0, 160) : "failed",
+    });
+    throw error;
+  }
+}
+
+async function qlooFetchInner(
+  path: string,
+  search: URLSearchParams,
+): Promise<{ payload: unknown; source: QlooCallSource; httpStatus?: number }> {
   assertServer();
   const built = buildQlooRequest({
     path,
@@ -73,12 +95,12 @@ async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
   const store = getPlanStore();
   const cached = await store.cacheGet(cacheKey);
   if (cached) {
-    return cached as T;
+    return { payload: cached, source: "cache" };
   }
 
   const pending = inFlight.get(cacheKey);
   if (pending) {
-    return (await pending) as T;
+    return { payload: await pending, source: "shared" };
   }
   const request = limit(async () => {
     if (remainingMs() < QLOO_MIN_CALL_MS) {
@@ -109,7 +131,7 @@ async function qlooFetch<T>(path: string, search: URLSearchParams): Promise<T> {
   });
   inFlight.set(cacheKey, request);
   try {
-    return (await request) as T;
+    return { payload: await request, source: "live", httpStatus: 200 };
   } finally {
     inFlight.delete(cacheKey);
   }

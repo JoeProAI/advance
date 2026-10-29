@@ -44,3 +44,25 @@ export function pickByTier(entities: QlooEntity[], tier: BudgetTier): QlooEntity
   const want: RoomSize = tier === "rooms" ? "small" : "theater";
   return entities.find((entity) => roomSize(entity).size === want) ?? entities[0];
 }
+
+/** Qloo tags that mean "not a room you book a club or theater show in". */
+const WRONG_ROOM_TAGS = ["Stadium", "Sports complex", "Orchestra", "Record store", "Museum", "Art museum"];
+const WRONG_ROOM_NAME = /\b(stadium|orchestra|symphony|philharmonic|museum|ballpark|speedway|records|record store|record shop)\b/i;
+
+/**
+ * Why a Qloo venue hit is the wrong kind of room, or undefined if it is fine.
+ * Live runs returned "Hardcore Stadium" for a Boston club date, "The
+ * Cleveland Orchestra" as a room, and a record store in Asheville.
+ */
+export function wrongRoom(entity: QlooEntity): string | undefined {
+  const names = new Set(entityTags(entity).map((tag) => tag.name));
+  const tag = WRONG_ROOM_TAGS.find((name) => names.has(name));
+  if (tag) {
+    return `Qloo tags it ${tag.toLowerCase()}`;
+  }
+  const match = entity.name.match(WRONG_ROOM_NAME);
+  if (match) {
+    return `name reads as a ${match[1]!.toLowerCase()}`;
+  }
+  return undefined;
+}

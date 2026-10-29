@@ -135,6 +135,11 @@ function respectsDrive(order: CandidateCity[], maxHours: number, mph: number): b
   return true;
 }
 
+/** Routing value of a city: the lift blend when present, else affinity. */
+export function cityValue(city: CandidateCity): number {
+  return typeof city.score === "number" ? city.score : city.affinity;
+}
+
 function greedySelect(
   pool: CandidateCity[],
   showCount: number,
@@ -154,7 +159,7 @@ function greedySelect(
       if (hours > maxHours) {
         continue;
       }
-      const score = candidate.affinity - hours / Math.max(maxHours, 0.1);
+      const score = cityValue(candidate) - hours / Math.max(maxHours, 0.1);
       if (score > bestScore) {
         bestScore = score;
         bestIndex = i;
@@ -176,7 +181,7 @@ export function selectAndRoute(input: RouteInput): RouteResult {
     return { cities: [], totalMiles: 0, totalDriveHours: 0 };
   }
 
-  const ranked = [...input.candidates].sort((a, b) => b.affinity - a.affinity);
+  const ranked = [...input.candidates].sort((a, b) => cityValue(b) - cityValue(a));
   const home = input.homeCity
     ? ranked.find(
         (city) =>
@@ -185,16 +190,25 @@ export function selectAndRoute(input: RouteInput): RouteResult {
             `${input.homeCity!.name}, ${input.homeCity!.region}`.toLowerCase(),
       )
     : undefined;
+  // Start where the run is full length first, then where the picked cities
+  // score highest in total. Counting reachable cities alone favored the
+  // dense East corridor for every act.
+  const runValue = (from: CandidateCity) => {
+    const picks = greedySelect(ranked, showCount, maxHours, from, mph);
+    return { len: picks.length, total: picks.reduce((sum, city) => sum + cityValue(city), 0) };
+  };
   const start =
     home ??
-    ranked.reduce((best, city) => {
-      const candidateLen = greedySelect(ranked, showCount, maxHours, city, mph).length;
-      const bestLen = greedySelect(ranked, showCount, maxHours, best, mph).length;
-      if (candidateLen !== bestLen) {
-        return candidateLen > bestLen ? city : best;
-      }
-      return city.affinity > best.affinity ? city : best;
-    }, ranked[0]!);
+    ranked.reduce(
+      (best, city) => {
+        const value = runValue(city);
+        if (value.len !== best.value.len) {
+          return value.len > best.value.len ? { city, value } : best;
+        }
+        return value.total > best.value.total + 1e-9 ? { city, value } : best;
+      },
+      { city: ranked[0]!, value: runValue(ranked[0]!) },
+    ).city;
   const selected = greedySelect(ranked, showCount, maxHours, start, mph);
   const startIndex = 0;
   const orderIdx = twoOpt(nearestNeighborOrder(selected, startIndex), selected);
@@ -224,10 +238,46 @@ export function snapToFriday(from: Date): Date {
   return date;
 }
 
+/** Fourth Thursday of November. */
+function thanksgiving(year: number): string {
+  const first = new Date(Date.UTC(year, 10, 1, 12));
+  const offset = (4 - first.getUTCDay() + 7) % 7;
+  return new Date(Date.UTC(year, 10, 1 + offset + 21, 12)).toISOString().slice(0, 10);
+}
+
+/** Nights no promoter books a club show: holidays where rooms go dark. */
+export function isBlackoutDate(iso: string): boolean {
+  const year = Number(iso.slice(0, 4));
+  const md = iso.slice(5);
+  return ["07-04", "12-24", "12-25", "12-31", "01-01"].includes(md) || iso === thanksgiving(year);
+}
+
+/** Holiday stretch the default start date steps around entirely. */
+function inHolidayStretch(iso: string): boolean {
+  const md = iso.slice(5);
+  return md >= "12-19" || md <= "01-04";
+}
+
+/** Days a default two-week run can span. */
+const DEFAULT_RUN_SPAN_DAYS = 14;
+
 export function defaultTourStartDate(from: Date = new Date()): string {
   const target = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate(), 12));
   target.setUTCDate(target.getUTCDate() + BOOKING_WINDOW_DAYS);
-  return snapToFriday(target).toISOString().slice(0, 10);
+  let start = snapToFriday(target);
+  const touchesHolidays = () => {
+    for (let d = 0; d <= DEFAULT_RUN_SPAN_DAYS; d += 1) {
+      const day = new Date(start);
+      day.setUTCDate(day.getUTCDate() + d);
+      if (inHolidayStretch(day.toISOString().slice(0, 10))) return true;
+    }
+    return false;
+  };
+  if (touchesHolidays()) {
+    const year = start.getUTCMonth() === 0 ? start.getUTCFullYear() : start.getUTCFullYear() + 1;
+    start = snapToFriday(new Date(Date.UTC(year, 0, 5, 12)));
+  }
+  return start.toISOString().slice(0, 10);
 }
 
 export function assignDates(stopCount: number, startDate?: string, restEvery = 3): string[] {
@@ -240,6 +290,10 @@ export function assignDates(stopCount: number, startDate?: string, restEvery = 3
   const dates: string[] = [];
   const cursor = new Date(start);
   for (let i = 0; i < stopCount; i += 1) {
+    // Never put a show on a holiday; slide to the next open night.
+    while (isBlackoutDate(cursor.toISOString().slice(0, 10))) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
     dates.push(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
     if ((i + 1) % restEvery === 0 && i < stopCount - 1) {

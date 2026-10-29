@@ -106,6 +106,9 @@ export type QlooCompareResult = {
   overlap: number;
   shared_tags: string[];
   note: string;
+  /** Every shared tag Qloo returned. Scores are quantized, the count is not. */
+  shared_count?: number;
+  scored_tags?: Array<{ name: string; score: number }>;
 };
 
 export type QlooTrendResult = {

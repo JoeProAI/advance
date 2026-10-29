@@ -59,6 +59,10 @@ export type OpenerPick = {
   overlap?: number;
   /** Qloo bio or birthplace names the stop city. */
   local?: boolean;
+  /** Compare: how many taste tags Qloo says the two audiences share. */
+  sharedTagCount?: number;
+  /** Compare: the top shared tags with Qloo's scores. */
+  sharedTags?: Array<{ name: string; score: number }>;
   why: string;
 };
 
@@ -82,6 +86,42 @@ export type RoutedStop = {
   brief: PromoBrief;
   driveHoursFromPrev: number;
   milesFromPrev: number;
+  receipt?: StopReceipt;
+};
+
+export type StopReceipt = {
+  heat: {
+    geohash?: string;
+    cellAffinity?: number;
+    cellPopularity: number;
+    affinityRank: number;
+    cityScore: number;
+    baseline?: number;
+    lift?: number;
+    routeScore?: number;
+  };
+  /** Receipt numbers (QlooCallReceipt.n) of the calls behind this stop. */
+  callNs: number[];
+  promoEntityIds: string[];
+};
+
+export type CityBoardRow = {
+  name: string;
+  region: string;
+  affinity: number;
+  baseline?: number;
+  lift?: number;
+  score: number;
+  routed: boolean;
+  note: string;
+};
+
+export type PlanReceipts = {
+  calls: import("@/lib/qloo/trace").QlooCallReceipt[];
+  totals: { calls: number; live: number; cache: number; shared: number; mock: number; errors: number; ms: number };
+  /** Named entities on the sheet that no Qloo response returned. */
+  invented: number;
+  checkedEntities: number;
 };
 
 export type RoutedTour = {
@@ -114,10 +154,24 @@ export type TourPlan = {
   qlooMode: QlooMode;
   writer: WriterMode;
   thinData: boolean;
+  cityBoard?: CityBoardRow[];
+  scoring?: { method: string; panel: string[]; liftWeight: number; baselineLoaded: boolean };
+  withoutQloo?: import("@/lib/scoring/without-qloo").WithoutQlooRoute;
+  swaps?: Array<{ city: string; reason: string }>;
+  receipts?: PlanReceipts;
 };
 
 export type CandidateCity = City & {
   affinity: number;
   affinityRank: number;
   popularity: number;
+  /** Mean reference-panel score for this city, when a baseline was loaded. */
+  baseline?: number;
+  /** Act affinity minus baseline. */
+  lift?: number;
+  /** Routing score, 0 to 1. Falls back to affinity when absent. */
+  score?: number;
+  /** Winning heatmap cell, kept for receipts. */
+  geohash?: string;
+  cellAffinity?: number;
 };
