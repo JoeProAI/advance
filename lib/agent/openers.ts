@@ -6,7 +6,7 @@ import type { City, ResolvedAct } from "@/lib/types";
  * Opener picking. Probed Oct 20, 2026: `signal.location` (POINT + radius,
  * weight very_high), `signal.location.query`, and `filter.location` + radius
  * all return near-identical artist/person lists across Atlanta, Pittsburgh,
- * and St. Louis. Qloo does not localize these types. So Advance pulls one
+ * and St. Louis. Qloo does not localize these types. So Settlement pulls one
  * tour-wide pool, drops implausible names, boosts acts whose Qloo biography
  * or birthplace names the stop city, and never books the same opener twice
  * while the pool lasts.

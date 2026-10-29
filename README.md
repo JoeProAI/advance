@@ -1,4 +1,4 @@
-# Advance
+# Settlement
 
 A tour-routing desk for independent musicians and comedians. Type a public act name. The agent finds cities where that audience already lives (Qloo heatmaps), routes a drivable run, picks rooms that share the crowd, suggests local openers, and writes a promo brief for each stop.
 
@@ -15,19 +15,19 @@ Every city, room, opener, podcast, bar, and brand in a live plan comes from the 
 - `/v2/insights` for places (fixed venue and comedy-club tags), artists or comedians (openers), podcasts, bars, and brands fills each stop.
 - `/v2/insights/compare` scores headliner and opener audience overlap.
 
-Advance adds routing (drive caps, nearest-neighbor + 2-opt), honest labels when Qloo comes back thin, and the share page. The Qloo key stays on the server; no personal data is sent.
+Settlement adds routing (drive caps, nearest-neighbor + 2-opt), honest labels when Qloo comes back thin, and the share page. The Qloo key stays on the server; no personal data is sent.
 
 ## 1. Product problem
 
-Bookers still guess the next city. Advance turns Qloo group-taste geography into a shareable run: cities first, then rooms, openers, and promo facts. Results describe where a crowd already clusters. They do not predict what any one person will do.
+Bookers still guess the next city. Settlement turns Qloo group-taste geography into a shareable run: cities first, then rooms, openers, and promo facts. Results describe where a crowd already clusters. They do not predict what any one person will do.
 
 ## 2. Qloo workflows used
 
-The event supports `qloo exec` and `qloo mcp` from `@qloo/qloo-harness` (>= 0.1.26). Those surfaces expose nine workflows. Advance cites them and answers the same questions on the documented REST API (`GET` + `X-Api-Key` at `https://hackathon.api.qloo.com`) inside the Next.js server.
+The event supports `qloo exec` and `qloo mcp` from `@qloo/qloo-harness` (>= 0.1.26). Those surfaces expose nine workflows. Settlement cites them and answers the same questions on the documented REST API (`GET` + `X-Api-Key` at `https://hackathon.api.qloo.com`) inside the Next.js server.
 
 We do not spawn `qloo exec` or `qloo mcp` from the web app. A Vercel or serverless host cannot keep a stdio MCP process, the judge path must run in mock without a global harness, and our allow-list plus call budget live in TypeScript. Wrapping each step in a CLI subprocess would weaken the demo.
 
-| Harness workflow | In Advance | Why it fits |
+| Harness workflow | In Settlement | Why it fits |
 |---|---|---|
 | `describe` | Yes | Resolve a public act name via `/search` + `/entities` |
 | `where_popular` | Yes | National heatmap via `filter.type=urn:heatmap`, cells snapped to tour cities |
@@ -45,7 +45,7 @@ Mapping source: [`lib/qloo/workflows.ts`](lib/qloo/workflows.ts). The desk radio
 
 Example: MJ Lenderman, 8 shows, 6h drive cap, first Friday about eight weeks out.
 
-1. `GET /search?query=MJ%20Lenderman&types=urn:entity:artist,urn:entity:person` then `GET /entities` → entity id (mock uses a synthetic UUID). Search always returns its closest hits, so Advance only routes an exact name match and otherwise answers "Did you mean".
+1. `GET /search?query=MJ%20Lenderman&types=urn:entity:artist,urn:entity:person` then `GET /entities` → entity id (mock uses a synthetic UUID). Search always returns its closest hits, so Settlement only routes an exact name match and otherwise answers "Did you mean".
 2. `GET /v2/insights?filter.type=urn:heatmap&filter.location=POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))&signal.interests.entities=<id>` → one national grid of unnamed geohash cells. Each cell snaps to the nearest tour city within 40 miles; a city scores its best cell's affinity × popularity. One call keeps every city on the same scale. (`output.heatmap.boundary=city` answers 400 on the hackathon host, and free-text regions resolve unpredictably, so neither is used.)
 3. Local rank under the drive cap → ordered stops (Chicago → Milwaukee → …).
 4. Place insights in each city with a fixed tag (`urn:tag:category:place:live_music_venue` or `urn:tag:genre:place:comedy_club`) and the act as signal. Qloo has no capacity field, so room size comes only from Qloo tags (Intimate, Cozy, Concert hall, Performing arts theater) and reads "Size unknown" otherwise.
@@ -62,7 +62,7 @@ Screenshots of live plans (no credentials, no personal data): [`docs/demo/`](doc
 
 ## 5. Setup from a clean environment
 
-Needs Node 22. The official harness, if you install it for local `qloo exec` experiments, wants 22.19.0+. Advance itself does not require the harness.
+Needs Node 22. The official harness, if you install it for local `qloo exec` experiments, wants 22.19.0+. Settlement itself does not require the harness.
 
 ```bash
 npm install
@@ -184,6 +184,6 @@ Probed Oct 20, 2026: for `urn:entity:artist` and `urn:entity:person`, `signal.lo
 ## What live probing found
 
 - `urn:heatmap` returns unnamed geohash cells; the desk snaps them to the nearest of 36 tour cities.
-- `/v2/insights/compare` returns scored shared tags, no overlap number. Advance uses the mean of the top five tag scores.
+- `/v2/insights/compare` returns scored shared tags, no overlap number. Settlement uses the mean of the top five tag scores.
 - Trends are not served on the hackathon host. Live mode hides momentum.
 - Comedian coverage is thinner: some cities (Richmond) return no comedy rooms.

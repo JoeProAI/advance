@@ -44,7 +44,7 @@ export const US_CITIES: City[] = [
  * the queried area, so one national call keeps every city on the same scale
  * (separate regional calls are not comparable). Qloo resolves free-text
  * region names unpredictably ("Midwest United States" lands on Midwest City,
- * OK), so Advance never sends them.
+ * OK), so Settlement never sends them.
  */
 export const CONUS_WKT = "POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))";
 

@@ -1,14 +1,14 @@
-# Advance submission
+# Settlement submission
 
 Filled against the official kit [docs/SUBMISSION.md](https://github.com/qloo/qloo-hackathon-kit/blob/main/docs/SUBMISSION.md) and the [developer guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide).
 
 ## 1. Product problem statement
 
-Independent musicians and comedians still sketch tours from habit. Advance takes a public act name, reads Qloo group-taste geography, and files a drivable run: cities, rooms, local openers, and a promo brief per stop. The user is a booker. There is no signup.
+Independent musicians and comedians still sketch tours from habit. Settlement takes a public act name, reads Qloo group-taste geography, and files a drivable run: cities, rooms, local openers, and a promo brief per stop. The user is a booker. There is no signup.
 
 ## 2. Qloo workflow or MCP tools used
 
-Event surfaces: `qloo exec` and `qloo mcp` from `@qloo/qloo-harness`. Advance cites the nine official workflows and implements the matching product questions on the documented REST API from the Next.js server (`GET`, `X-Api-Key`, `https://hackathon.api.qloo.com`).
+Event surfaces: `qloo exec` and `qloo mcp` from `@qloo/qloo-harness`. Settlement cites the nine official workflows and implements the matching product questions on the documented REST API from the Next.js server (`GET`, `X-Api-Key`, `https://hackathon.api.qloo.com`).
 
 Adopted: `describe`, `where_popular`, `find_tags`, `recommend`, `rank`, `compare_audiences`, `entity_tags`, `trends`.
 

@@ -18,7 +18,7 @@ export const ENTITY_INSIGHT_TYPES = [
  * `urn:heatmap` is the documented heatmap mode. Probed live on the hackathon
  * host (Oct 20, 2026): it answers 200 with geohash cells when given a WKT
  * `filter.location` and a signal. Its `output.heatmap.boundary` only accepts
- * `urn:geohash` or `urn:entity:locality`, so Advance never sends it.
+ * `urn:geohash` or `urn:entity:locality`, so Settlement never sends it.
  */
 export const HEATMAP_TYPE = "urn:heatmap" as const;
 

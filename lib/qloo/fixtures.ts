@@ -8,7 +8,7 @@ import type { ActKind, City } from "@/lib/types";
 
 /**
  * Tag vocabulary shaped like live Qloo tags (`{id, name, type}`). The ids are
- * the documented place tags Advance filters on; the records are hand-written.
+ * the documented place tags Settlement filters on; the records are hand-written.
  */
 export const SYNTHETIC_TAGS = {
   musicVenue: {

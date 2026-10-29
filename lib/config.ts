@@ -2,7 +2,7 @@
  * Product name lives in one place so a rename is a one-line change.
  * NEXT_PUBLIC_APP_NAME can override it at build time.
  */
-export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME ?? "Advance";
+export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME ?? "Settlement";
 
 export const APP_TAGLINE = "Plan a tour where your audience already is.";
 

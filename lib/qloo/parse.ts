@@ -5,7 +5,7 @@
  * - `/v2/insights` returns `results.entities[]` or, for `urn:heatmap`,
  *   `results.heatmap[]` cells with no place names.
  * - `/v2/insights/compare` returns scored shared `results.tags[]`; there is
- *   no `overlap` field, so Advance derives one.
+ *   no `overlap` field, so Settlement derives one.
  * - Tags live on `entity.tags[]`; search hits use `types[]`, insights hits use
  *   `subtype`.
  */
@@ -115,7 +115,7 @@ export function explainScore(entity: QlooEntity, entityId?: string): number | un
 }
 
 /**
- * Compare has no overlap number. Advance reads the mean of the top five shared
+ * Compare has no overlap number. Settlement reads the mean of the top five shared
  * tag scores, clamped to 0..1. No shared tags means 0.
  */
 export function overlapFromCompare(raw: unknown): QlooCompareResult {

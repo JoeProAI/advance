@@ -187,7 +187,7 @@ const PREVIEW_ACT = {
   entityId: "demo-act",
   name: "MJ Lenderman",
   kind: "artist" as const,
-  description: "Desk preview built from a live Advance run.",
+  description: "Desk preview built from a live Settlement run.",
   popularity: 0.965,
 };
 

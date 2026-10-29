@@ -92,7 +92,7 @@ export function LandingPage({ fail }: { fail?: string | null }) {
           }}
         >
           <div className="absolute -top-3 right-4 rotate-3 bg-[var(--color-accent)] px-2 py-1 font-mono text-[length:var(--text-xs)] uppercase tracking-[var(--letter-ticket)] text-[var(--color-paper)]">
-            Advance sheet
+            Settlement sheet
           </div>
           <p className="ticket-kicker text-[var(--color-ink)]">Classified · copy desk</p>
           <div className="mt-4 grid gap-3">

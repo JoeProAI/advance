@@ -1,6 +1,6 @@
 /**
  * Official @qloo/qloo-harness workflows (qloo exec / qloo mcp).
- * Advance cites these and answers the same product questions over the
+ * Settlement cites these and answers the same product questions over the
  * documented REST API on the Next.js server. It does not spawn the CLI.
  */
 export const HARNESS_WORKFLOWS = [
