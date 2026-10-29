@@ -70,7 +70,7 @@ export const DESK_FAILURES: Record<Exclude<DeskState, "loading" | "partial">, De
     stamp: "VOID",
     title: "No act on that name.",
     body: "Search did not land an entity. Type the name as a booker would say it, or open one of the three tickets already on the counter.",
-    recovery: { href: "/", label: "Back to the advance sheet" },
+    recovery: { href: "/", label: "Back to the sheet" },
   },
   "invalid-date": {
     state: "invalid-date",

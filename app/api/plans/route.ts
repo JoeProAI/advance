@@ -13,7 +13,7 @@ export async function POST(request: Request): Promise<Response> {
   const limit = await checkPlanRateLimit(clientIp(request.headers));
   if (!limit.ok) {
     return Response.json(
-      { error: `New plans are limited to 5 per hour from one address. Try again in ${limit.retryAfterSec}s.` },
+      { error: `New plans are limited to 15 per hour from one address. Try again in ${limit.retryAfterSec}s.` },
       { status: 429, headers: { "Retry-After": String(limit.retryAfterSec) } },
     );
   }
