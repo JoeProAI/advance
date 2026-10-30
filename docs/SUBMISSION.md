@@ -23,7 +23,7 @@ Inputs sent toward Qloo: public act name (search query) and city / region string
 Entity / tag choices:
 
 - Act search types: `urn:entity:artist`, `urn:entity:person`.
-- Geography: `filter.type=urn:entity:destination` + `output.heatmap.boundary=city` + location + act as `signal.interests.entities` ([Insights deep dive](https://docs.qloo.com/reference/insights-api-deep-dive)). `urn:heatmap` is not on the hackathon type list.
+- Geography: `filter.type=urn:heatmap` + a national polygon + the act as `signal.interests.entities`. The heatmap returns unnamed geohash cells; each cell snaps to the nearest of 36 tour cities within 40 miles. `output.heatmap.boundary=city` answers 400 on the hackathon host, so it is not used.
 - Rooms: tag id from `/v2/tags` (`music venue` or `comedy club`), then `filter.type=urn:entity:place`. Tags are `urn:tag:` IDs, never free strings.
 - Openers: `urn:entity:artist` for music, `urn:entity:person` for comedians, plus `/v2/insights/compare`.
 - Promo: tags already on the act from `/entities`, plus podcast / place (bar tag id) / brand insights.
@@ -37,7 +37,7 @@ No credentials or personal data.
 - [`docs/demo/landing.png`](demo/landing.png)
 - [`docs/demo/plan.png`](demo/plan.png)
 
-Judge path: three one-click tickets or a typed public act name. Mock mode. Atlas visible without map tiles.
+Judge path: three one-click tickets or a typed public act name. Mock mode. Atlas visible without map tiles. Live plans add the "why these cities" lift strip, the With/without Qloo toggle, the receipts drawer ("N Qloo calls · X.X s · 0 invented"), a per-stop receipts tab, a settlement sheet and hold-request drafts at /plan/[id]/packet, and the backtest numbers at /proof.
 
 ## 5. Setup from a clean environment
 
@@ -53,7 +53,7 @@ Leave `QLOO_MODE=mock`. Do not put a key in the repo or in any `NEXT_PUBLIC_*` v
 
 - Aggregate affinity only. Not a forecast of individual attendance or preference.
 - Mock data is synthetic. Live coverage can be thin; rooms become Hold rather than invented.
-- Room capacity is an estimate from popularity.
+- Qloo has no capacity field. Room size comes only from Qloo tags (theater/club/small/unknown); settlement numbers take editable capacity bands per size tag.
 - `/v2/insights/compare` and `/trends/entity` degrade in place if the host returns an error.
 - OpenRouter is optional and must not invent entities.
 

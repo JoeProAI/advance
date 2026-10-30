@@ -14,7 +14,7 @@ export const DEFAULT_SHOW_COUNT = 8;
 export const DEFAULT_MAX_DRIVE_HOURS = 5;
 export const DEFAULT_CRUISE_MPH = 50;
 
-export const PLAN_RATE_LIMIT_PER_HOUR = 5;
+export const PLAN_RATE_LIMIT_PER_HOUR = 15;
 
 /**
  * Demo tickets: real public acts, resolved live through Qloo search.

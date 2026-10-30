@@ -17,6 +17,10 @@ Every city, room, opener, podcast, bar, and brand in a live plan comes from the 
 
 Settlement adds routing (drive caps, nearest-neighbor + 2-opt), honest labels when Qloo comes back thin, and the share page. The Qloo key stays on the server; no personal data is sent.
 
+## Who pays
+
+Independent managers, small booking agencies, and mid-size promoters. The price is per routed plan or per seat: cheap enough to run a speculative routing, structured enough to hand a promoter the packet.
+
 ## 1. Product problem
 
 Bookers still guess the next city. Settlement turns Qloo group-taste geography into a shareable run: cities first, then rooms, openers, and promo facts. Results describe where a crowd already clusters. They do not predict what any one person will do.
@@ -49,7 +53,7 @@ Example: MJ Lenderman, 8 shows, 6h drive cap, first Friday about eight weeks out
 2. `GET /v2/insights?filter.type=urn:heatmap&filter.location=POLYGON((-125 24, -66 24, -66 49.5, -125 49.5, -125 24))&signal.interests.entities=<id>` → one national grid of unnamed geohash cells. Each cell snaps to the nearest tour city within 40 miles; a city scores its best cell's affinity × popularity. One call keeps every city on the same scale. (`output.heatmap.boundary=city` answers 400 on the hackathon host, and free-text regions resolve unpredictably, so neither is used.)
 3. Local rank under the drive cap → ordered stops (Chicago → Milwaukee → …).
 4. Place insights in each city with a fixed tag (`urn:tag:category:place:live_music_venue` or `urn:tag:genre:place:comedy_club`) and the act as signal. Qloo has no capacity field, so room size comes only from Qloo tags (Intimate, Cozy, Concert hall, Performing arts theater) and reads "Size unknown" otherwise.
-5. One artist or person insights call per plan, capped at the headliner's popularity, then `/v2/insights/compare` for each stop's lead opener. Overlap is the mean of the top five shared tag scores (compare returns no single overlap number). See "Openers" below.
+5. One artist or person insights call per plan, capped at the headliner's popularity, then `/v2/insights/compare` for each stop's lead opener. The lead opener shows its shared-tag count and the top shared tags with their scores (compare returns no single overlap number, and its scores quantize, so a mean is fake precision). See "Openers" below.
 6. Tag / podcast / place / brand insights → promo brief. Routing is ours, not Qloo.
 
 No user name, email, device id, or account id is sent. Inputs are a public act name and optional start city. `.env.example` keeps `QLOO_API_KEY` empty. Live responses are cached only on the server (`.data/`, gitignored, or the Convex `qlooCache` table when deployed).
@@ -74,9 +78,10 @@ npm run dev
 Open [http://127.0.0.1:4567](http://127.0.0.1:4567).
 
 ```bash
-npm run test        # routing, Qloo params, key-leak, public-signal checks
-npm run typecheck
+npm run build       # run once before typecheck on a fresh clone: LayoutProps comes from Next typegen
 npm run lint
+npm run typecheck
+npm run test        # routing, Qloo params, key-leak, public-signal checks
 npm run build
 npm run smoke       # mock contract; use QLOO_MODE=live QLOO_API_KEY=... once the key arrives
 ```
@@ -184,6 +189,10 @@ Probed Oct 20, 2026: for `urn:entity:artist` and `urn:entity:person`, `signal.lo
 ## What live probing found
 
 - `urn:heatmap` returns unnamed geohash cells; the desk snaps them to the nearest of 36 tour cities.
-- `/v2/insights/compare` returns scored shared tags, no overlap number. Settlement uses the mean of the top five tag scores.
+- `/v2/insights/compare` returns scored shared tags, no overlap number, and the scores quantize. Settlement shows the shared-tag count and the top tags instead of a fake-precision mean.
 - Trends are not served on the hackathon host. Live mode hides momentum.
 - Comedian coverage is thinner: some cities (Richmond) return no comedy rooms.
+
+## Built with AI agents
+
+This repo was built by AI coding agents (Devin) under human direction: the brief, the audit data, and the review decisions are human; the code, tests, and docs are agent-written and agent-tested. Every Qloo-facing claim in the docs was verified against the live API.

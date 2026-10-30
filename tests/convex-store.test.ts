@@ -133,3 +133,10 @@ describe("convex store adapter", () => {
     expect(() => selectPlanStore({ CONVEX_URL: "https://example.convex.cloud" })).toThrow(/ADVANCE_STORE_SECRET/);
   });
 });
+
+describe("plan rate limit configuration", () => {
+  it("allows 15 plans per hour", async () => {
+    const { PLAN_RATE_LIMIT_PER_HOUR } = await import("@/lib/config");
+    expect(PLAN_RATE_LIMIT_PER_HOUR).toBe(15);
+  });
+});
