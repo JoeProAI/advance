@@ -18,12 +18,24 @@ import { withDeadline } from "@/lib/qloo/deadline";
 import { assignOpeners, openerPopularityCap, rejectOpener, type AssignedOpener } from "@/lib/agent/openers";
 import { harnessLabel } from "@/lib/qloo/workflows";
 import type { QlooEntitiesResponse, QlooEntity } from "@/lib/qloo/types";
-import { assignDatesDetailed, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
+import { assignDatesDetailed, driveHours, haversineMiles, nightsOnRoad, selectAndRoute } from "@/lib/routing/plan";
+import { getPlanStore } from "@/lib/storage";
+import {
+  BASELINE_CACHE_KEY,
+  LIFT_WEIGHT,
+  REFERENCE_PANEL,
+  buildBaseline,
+  scoreCities,
+  type Baseline,
+  type ScoredCity,
+} from "@/lib/scoring/lift";
 import { createId } from "@/lib/utils";
 import { resolveWriter, writeBrief, writeSummary } from "@/lib/agent/write";
 import type {
   AgentStep,
   City,
+  CandidateCity,
+  CityBoardRow,
   OpenerPick,
   PlanRequest,
   PromoBrief,
@@ -307,6 +319,82 @@ async function promoFacts(
   };
 }
 
+/**
+ * Mean panel heatmap per city, loaded once per environment and cached in the
+ * store. Live mode only: mock mode returns null and lift reads 0.
+ */
+async function loadBaseline(client: Client): Promise<Baseline | null> {
+  if (client.mode !== "live") {
+    return null;
+  }
+  const store = getPlanStore();
+  const cached = await store.cacheGet(BASELINE_CACHE_KEY);
+  if (cached && typeof cached === "object" && Array.isArray((cached as Baseline).panel)) {
+    return cached as Baseline;
+  }
+  const settled = await Promise.allSettled(
+    REFERENCE_PANEL.map(async (member): Promise<{ name: string; cities: CandidateCity[] }> => {
+      const raw = await client.insights(cityHeatmapParams({ entityId: member.entityId }));
+      return { name: member.name, cities: isHeatmapResponse(raw) ? cellsToCities(raw.results.heatmap) : [] };
+    }),
+  );
+  const panel = settled
+    .map((result) => (result.status === "fulfilled" ? result.value : null))
+    .filter((row): row is { name: string; cities: CandidateCity[] } => row !== null);
+  // Require at least three quarters of the panel or the mean is not a baseline.
+  if (panel.length < Math.ceil(REFERENCE_PANEL.length * 0.75)) {
+    return null;
+  }
+  const baseline = buildBaseline(panel);
+  await store.cacheSet(BASELINE_CACHE_KEY, baseline);
+  return baseline;
+}
+
+/**
+ * The "why these cities" board: the top 10 scored markets with an honest
+ * note for each one the run left out.
+ */
+export function buildCityBoard(input: {
+  scored: ScoredCity[];
+  routed: CandidateCity[];
+  swaps: Array<{ city: string; reason: string }>;
+  maxDriveHours: number;
+  take?: number;
+}): CityBoardRow[] {
+  const onRun = new Set(input.routed.map(cityKey));
+  const swapped = new Map(input.swaps.map((swap) => [swap.city, swap.reason]));
+  return input.scored.slice(0, input.take ?? 10).map((city) => {
+    const key = cityKey(city);
+    let note: string;
+    let routed = false;
+    if (onRun.has(key)) {
+      note = "on the run";
+      routed = true;
+    } else if (swapped.has(key)) {
+      note = `swapped out: ${swapped.get(key)}`;
+    } else {
+      const nearest = input.routed.reduce(
+        (best, stop) => Math.min(best, driveHours(haversineMiles(city, stop))),
+        Number.POSITIVE_INFINITY,
+      );
+      note =
+        nearest > input.maxDriveHours
+          ? `cut: ${nearest.toFixed(1)}h from the nearest stop, cap is ${input.maxDriveHours}h`
+          : "scored below the cities on this run";
+    }
+    return {
+      name: city.name,
+      region: city.region,
+      affinity: city.affinity,
+      baseline: city.baseline,
+      lift: city.lift,
+      score: city.score,
+      routed,
+      note,
+    };
+  });
+}
+
 /** Run a Qloo step; 401/403 still fail the plan, anything else degrades. */
 async function softly<T>(emit: Emit, label: string, fallback: T, run: () => Promise<T>): Promise<{ value: T; failed: boolean }> {
   try {
@@ -449,8 +537,18 @@ async function runWithinDeadline(
 
   await emit(
     step(
+      "Loading the taste baseline",
+      `Mean heatmap for ${REFERENCE_PANEL.length} big touring acts, so the route can rank where ${act.name} over-indexes instead of where everyone is big.`,
+      `GET /v2/insights?filter.type=urn:heatmap ×${REFERENCE_PANEL.length} · ${harnessLabel("where_popular")}`,
+    ),
+  );
+  const baseline = await softly(emit, "Taste baseline", null as Baseline | null, () => loadBaseline(client));
+  const scored = scoreCities(candidates, baseline.value);
+
+  await emit(
+    step(
       "Routing the run",
-      `Scoring ${candidates.length} cities, then nearest-neighbor + 2-opt under a ${request.maxDriveHours}h drive cap.`,
+      `Scoring ${scored.length} cities (half affinity, half lift vs the panel), then nearest-neighbor + 2-opt under a ${request.maxDriveHours}h drive cap.`,
       `route_plan · ${harnessLabel("rank")}`,
     ),
   );
@@ -475,7 +573,7 @@ async function runWithinDeadline(
   const swaps: Array<{ city: string; reason: string }> = [];
   const venueResults = new Map<string, VenueCheck>();
   let routed = selectAndRoute({
-    candidates: candidates.filter((city) => !droppedCities.has(cityKey(city))),
+    candidates: scored.filter((city) => !droppedCities.has(cityKey(city))),
     showCount: request.showCount,
     maxDriveHours: request.maxDriveHours,
     homeCity: home,
@@ -502,7 +600,7 @@ async function runWithinDeadline(
       break;
     }
     // Never swap a city when losing it would leave the run short.
-    const remaining = candidates.filter((city) => !droppedCities.has(cityKey(city)));
+    const remaining = scored.filter((city) => !droppedCities.has(cityKey(city)));
     if (remaining.length - unusable.length < request.showCount) {
       break;
     }
@@ -513,7 +611,7 @@ async function runWithinDeadline(
       swaps.push({ city: cityKey(city), reason });
     }
     routed = selectAndRoute({
-      candidates: candidates.filter((city) => !droppedCities.has(cityKey(city))),
+      candidates: scored.filter((city) => !droppedCities.has(cityKey(city))),
       showCount: request.showCount,
       maxDriveHours: request.maxDriveHours,
       homeCity: home,
@@ -561,7 +659,14 @@ async function runWithinDeadline(
   }
   const assignments = assignOpeners(poolRun.value.pool, routed.cities);
 
-  let thin = candidates.length < request.showCount;
+  const cityBoard = buildCityBoard({
+    scored,
+    routed: routed.cities,
+    swaps,
+    maxDriveHours: request.maxDriveHours,
+  });
+
+  let thin = scored.length < request.showCount;
   const stops: RoutedStop[] = await Promise.all(
     routed.cities.map(async (city, i): Promise<RoutedStop> => {
       // "Washington" alone resolved outside DC and "Richmond" can land in
@@ -649,5 +754,12 @@ async function runWithinDeadline(
     writer,
     thinData: thin,
     ...(swaps.length ? { swaps } : {}),
+    cityBoard,
+    scoring: {
+      method: `score = ${(1 - LIFT_WEIGHT).toFixed(1)} x normalized affinity + ${LIFT_WEIGHT.toFixed(1)} x normalized lift (act score minus the panel mean per city)`,
+      panel: baseline.value?.panel ?? [],
+      liftWeight: baseline.value ? LIFT_WEIGHT : 0,
+      baselineLoaded: Boolean(baseline.value),
+    },
   };
 }

@@ -108,6 +108,57 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
         </aside>
       </div>
 
+      {plan?.cityBoard?.length ? (
+        <section className="border-b border-[var(--color-line)] px-5 py-6 md:px-8">
+          <h2 className="display text-3xl">Why these cities</h2>
+          <p className="mt-1 max-w-3xl text-sm text-[var(--color-muted)]">
+            {plan.scoring?.baselineLoaded
+              ? `${plan.scoring.method}. Panel: ${plan.scoring.panel.join(", ")}.`
+              : "Ranked by Qloo affinity for this act (no baseline loaded)."}
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[46rem] border-collapse text-left text-sm">
+              <thead className="ticket-kicker text-[var(--color-muted)]">
+                <tr>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">City</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Affinity</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Panel baseline</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Lift</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Score</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.cityBoard.map((row) => (
+                  <tr key={`${row.name}-${row.region}`}>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3">
+                      {row.name}, {row.region}
+                    </td>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3 font-mono">
+                      {formatAffinity(row.affinity)}
+                    </td>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3 font-mono">
+                      {typeof row.baseline === "number" ? formatAffinity(row.baseline) : "n/a"}
+                    </td>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3 font-mono">
+                      {typeof row.lift === "number"
+                        ? `${row.lift >= 0 ? "+" : ""}${formatAffinity(row.lift)}`
+                        : "n/a"}
+                    </td>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3 font-mono">
+                      {formatAffinity(row.score)}
+                    </td>
+                    <td className="border-b border-[var(--color-line)] py-2 pr-3 text-[var(--color-muted)]">
+                      {row.note}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
       <section className="px-5 py-8 md:px-8">
         <div className="mb-4 flex items-end justify-between">
           <h2 className="display text-3xl">Itinerary</h2>
