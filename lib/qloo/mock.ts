@@ -155,6 +155,28 @@ export async function mockInsights(params: QlooInsightsParams): Promise<QlooEnti
       });
     }
     const explain = params["feature.explainability"] === "true" || params["feature.explainability"] === true;
+    if (act.brokenCity === cityName) {
+      return parseEntityList({
+        success: true,
+        results: {
+          entities: [
+            {
+              name: `${nickForCity(cityName)} Field Stadium`,
+              entity_id: syntheticEntityId("3333", `${act.slug}:${cityName}:stadium`),
+              type: "urn:entity",
+              subtype: "urn:entity:place",
+              popularity: 0.97,
+              tags: [
+                SYNTHETIC_TAGS.musicVenue,
+                { id: "urn:tag:category:place:stadium", name: "Stadium", type: "urn:tag:category:place" },
+              ],
+              properties: { geocode },
+              query: { affinity: 0.9 },
+            },
+          ],
+        },
+      });
+    }
     const entities = venuesFor(act, cityName).map((room, i) => ({
       name: room.name,
       entity_id: syntheticEntityId("3333", `${act.slug}:${cityName}:venue:${i}:${room.name}`),

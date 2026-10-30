@@ -25,6 +25,7 @@ import type {
   QlooTagsResponse,
   QlooTrendsResponse,
 } from "@/lib/qloo/types";
+import { recordCall, summarizePayload } from "@/lib/qloo/trace";
 import { validateInsightsParams } from "@/lib/qloo/validate";
 
 export type QlooClient = {
@@ -49,6 +50,15 @@ function resolveMode(explicit?: QlooMode): QlooMode {
   return "mock";
 }
 
+/** Mock calls get receipts too, marked "mock", so the drawer never lies. */
+async function mocked<T>(path: string, params: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const value = await run();
+  const flat = Object.fromEntries(Object.entries(params).map(([key, v]) => [key, String(v)]));
+  recordCall({ path, params: flat, source: "mock", ms: Date.now() - startedAt, ...summarizePayload(value) });
+  return value;
+}
+
 export function createQlooClient(explicit?: QlooMode): QlooClient {
   const mode = resolveMode(explicit);
   let calls = 0;
@@ -69,11 +79,11 @@ export function createQlooClient(explicit?: QlooMode): QlooClient {
     },
     async search(params) {
       budget();
-      return mode === "live" ? liveSearch(params) : mockSearch(params);
+      return mode === "live" ? liveSearch(params) : mocked("/search", params, () => mockSearch(params));
     },
     async entities(entityIds) {
       budget();
-      return mode === "live" ? liveEntities(entityIds) : mockEntities(entityIds);
+      return mode === "live" ? liveEntities(entityIds) : mocked("/entities", { entity_ids: entityIds.join(",") }, () => mockEntities(entityIds));
     },
     async insights(params) {
       const validated = validateInsightsParams(params);
@@ -84,7 +94,7 @@ export function createQlooClient(explicit?: QlooMode): QlooClient {
       if (mode === "live") {
         return liveInsights(validated.params);
       }
-      return mockInsights(validated.params);
+      return mocked("/v2/insights", validated.params, () => mockInsights(validated.params));
     },
     async tags(query) {
       budget();
@@ -92,7 +102,7 @@ export function createQlooClient(explicit?: QlooMode): QlooClient {
     },
     async compare(a, b) {
       budget();
-      return mode === "live" ? liveCompare(a, b) : mockCompare(a, b);
+      return mode === "live" ? liveCompare(a, b) : mocked("/v2/insights/compare", { "a.signal.interests.entities": a.join(","), "b.signal.interests.entities": b.join(",") }, () => mockCompare(a, b));
     },
     async trends(entityId) {
       if (mode === "live") {

@@ -135,6 +135,8 @@ export function overlapFromCompare(raw: unknown): QlooCompareResult {
   return {
     overlap: Math.max(0, Math.min(1, mean)),
     shared_tags: top.map((tag) => tag.name),
+    shared_count: scored.length,
+    scored_tags: top.map((tag) => ({ name: tag.name, score: Number(tag.score.toFixed(3)) })),
     note: `Mean of the top ${top.length} shared tag scores from /v2/insights/compare.`,
   };
 }
@@ -186,6 +188,8 @@ export function cellsToCities(
         affinity: score,
         affinityRank: cell.query.affinity_rank,
         popularity,
+        geohash: cell.location.geohash,
+        cellAffinity: cell.query.affinity,
         score,
       });
     }
@@ -195,7 +199,7 @@ export function cellsToCities(
     .map((city) => {
       const { score, ...rest } = city;
       void score;
-      return rest;
+      return rest as CandidateCity;
     });
 }
 

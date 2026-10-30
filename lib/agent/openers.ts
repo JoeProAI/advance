@@ -38,15 +38,62 @@ function firstNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export type OpenerReject = "legacy" | "household-name" | "above-headliner" | "self";
+export type OpenerReject = "legacy" | "household-name" | "above-headliner" | "peer-draw" | "related" | "self";
+
+/**
+ * Qloo popularity is a percentile, so the top end is compressed: 0.965 vs
+ * 0.964 is a peer, not a support act. An opener needs at least this many
+ * times the headliner's distance from the top (1 - popularity).
+ */
+export const OPENER_HEADROOM = 2;
+
+/** Highest popularity an opener may have for this headliner. */
+export function openerPopularityCap(actPopularity: number): number {
+  const gap = Math.max(0.005, 1 - actPopularity);
+  return Math.max(0.05, 1 - OPENER_HEADROOM * gap);
+}
+
+function bioText(entity: QlooEntity): string {
+  const props = (entity.properties ?? {}) as Record<string, unknown>;
+  return [props.biography, props.short_description, props.description]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ");
+}
+
+/**
+ * Same family or same band: the opener's bio names the headliner, the
+ * headliner's bio names the opener, or they share a distinctive surname
+ * (Waxahatchee is Katie Crutchfield; Allison Crutchfield is her sister).
+ */
+export function isRelatedAct(entity: QlooEntity, act: Pick<ResolvedAct, "name" | "description"> & { bio?: string }): boolean {
+  const openerBio = bioText(entity);
+  const actBio = `${act.description ?? ""} ${act.bio ?? ""}`;
+  const named = (text: string, name: string) => name.length >= 3 && new RegExp(`\\b${escape(name)}\\b`, "i").test(text);
+  if (named(openerBio, act.name) || named(actBio, entity.name)) {
+    return true;
+  }
+  const surname = entity.name.split(/\s+/).at(-1) ?? "";
+  return entity.name.includes(" ") && surname.length >= 5 && named(actBio, surname);
+}
 
 /** Why a pool entity cannot open for this act, or undefined if it can. */
-export function rejectOpener(entity: QlooEntity, act: ResolvedAct, year = new Date().getFullYear()): OpenerReject | undefined {
+export function rejectOpener(
+  entity: QlooEntity,
+  act: ResolvedAct & { bio?: string },
+  year = new Date().getFullYear(),
+): OpenerReject | undefined {
   if (entity.entity_id === act.entityId) {
     return "self";
   }
-  if (entityPopularity(entity, 0) > act.popularity + 0.005) {
+  const popularity = entityPopularity(entity, 0);
+  if (popularity > act.popularity + 0.005) {
     return "above-headliner";
+  }
+  if (popularity > openerPopularityCap(act.popularity)) {
+    return "peer-draw";
+  }
+  if (isRelatedAct(entity, act)) {
+    return "related";
   }
   const props = (entity.properties ?? {}) as Record<string, unknown>;
   const start = firstNumber(props.start_year);

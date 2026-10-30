@@ -208,3 +208,32 @@ describe("defaultTourStartDate", () => {
     expect(dates[1]).toBe("2026-12-05");
   });
 });
+
+describe("holiday-safe dates", () => {
+  it("marks Jul 4, Christmas, New Year's, and Thanksgiving as blackouts", async () => {
+    const { isBlackoutDate } = await import("@/lib/routing/plan");
+    expect(isBlackoutDate("2026-07-04")).toBe(true);
+    expect(isBlackoutDate("2026-12-24")).toBe(true);
+    expect(isBlackoutDate("2026-12-25")).toBe(true);
+    expect(isBlackoutDate("2026-12-31")).toBe(true);
+    expect(isBlackoutDate("2027-01-01")).toBe(true);
+    // Thanksgiving 2026 is Thursday November 26.
+    expect(isBlackoutDate("2026-11-26")).toBe(true);
+    expect(isBlackoutDate("2026-11-27")).toBe(false);
+    expect(isBlackoutDate("2026-10-29")).toBe(false);
+  });
+
+  it("jumps the default start past the holiday stretch", () => {
+    // Oct 29 + 56 days snaps to Fri Dec 25, inside the stretch, so the run
+    // starts on the first Friday on or after Jan 5, 2027.
+    expect(defaultTourStartDate(new Date("2026-10-29T12:00:00Z"))).toBe("2027-01-08");
+  });
+
+  it("slides a show off a blackout date and says so", async () => {
+    const { assignDatesDetailed } = await import("@/lib/routing/plan");
+    const plan = assignDatesDetailed(2, "2026-12-25");
+    expect(plan.dates[0]).toBe("2026-12-26");
+    expect(plan.notes[0]).toBe("moved off Dec 25");
+    expect(plan.dates[1]).toBe("2026-12-27");
+  });
+});

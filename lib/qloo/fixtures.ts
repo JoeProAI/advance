@@ -54,6 +54,8 @@ export type SyntheticAct = {
   cityNames: string[];
   venueStyle: "rooms" | "clubs" | "warehouses";
   taste: string[];
+  /** Mock city that only returns unusable rooms, for swap-loop tests. */
+  brokenCity?: string;
 };
 
 // Real public act names for the demo tickets. Everything else on these
@@ -190,6 +192,12 @@ export function resolveSyntheticAct(name: string, hint?: ActKind): SyntheticAct 
   const kind = pickKind(name, hint);
   const hash = hashString(name);
   const pool = CITY_POOLS[hash % CITY_POOLS.length] ?? CITY_POOLS[0];
+  // Reserved mock act: its top city only ever returns a stadium, so the
+  // agent has to swap it for the next best city.
+  const brokenCity = needle === "stadium test act" ? "Chicago" : undefined;
+  const cityNames = needle === "stadium test act"
+    ? ["Chicago", "Milwaukee", "Detroit", "Cleveland", "Columbus", "Pittsburgh", "Minneapolis"]
+    : pool;
   const trimmed = name.trim() || "Unlisted Act";
   const created: SyntheticAct = {
     entityId: `00000000-2222-4000-8000-${(hash % 0xffffffff).toString(16).padStart(12, "0")}`,
@@ -199,7 +207,8 @@ export function resolveSyntheticAct(name: string, hint?: ActKind): SyntheticAct 
     description: `${trimmed} is a synthetic stand-in used in mock mode.`,
     popularity: 0.22 + ((hash >> 3) % 30) / 100,
     trendDelta: ((hash >> 5) % 25) / 100 - 0.05,
-    cityNames: pool,
+    cityNames,
+    ...(brokenCity ? { brokenCity } : {}),
     venueStyle: kind === "person" ? "clubs" : hash % 2 === 0 ? "rooms" : "warehouses",
     taste:
       kind === "person"

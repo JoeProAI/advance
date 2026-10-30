@@ -41,8 +41,15 @@ export function StopBrief({ stop, onClose }: { stop: RoutedStop; onClose: () => 
                 : stop.openers.map((opener) => (
                     <p key={opener.entityId}>
                       {opener.name},{" "}
-                      {typeof opener.overlap === "number"
-                        ? `overlap ${formatAffinity(opener.overlap)}`
+                      {typeof opener.sharedTagCount === "number"
+                        ? `${opener.sharedTagCount} shared tags${
+                            opener.sharedTags?.length
+                              ? ` (${opener.sharedTags
+                                  .slice(0, 3)
+                                  .map((tag) => `${tag.name} ${formatAffinity(tag.score)}`)
+                                  .join(", ")})`
+                              : ""
+                          }`
                         : `affinity ${formatAffinity(opener.affinity)}`}
                       . {opener.why}
                     </p>
