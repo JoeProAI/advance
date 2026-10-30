@@ -47,6 +47,10 @@ export type VenuePick = {
   affinity: number;
   popularity: number;
   estimatedRoom: string;
+  /** Qloo room-size tag class, kept for settlement math. */
+  size?: "small" | "theater" | "club" | "unknown";
+  /** Qloo properties.price_level (0-4) when present. */
+  priceLevel?: number;
   why: string;
   tags: string[];
 };

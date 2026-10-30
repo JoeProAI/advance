@@ -9,6 +9,7 @@ const KEY_NAME = "QLOO_API_KEY";
 const ALLOW_KEY_NAME = [
   "lib/qloo/live.ts",
   "scripts/qloo-smoke.ts",
+  "scripts/backtest.ts",
   "tests/qloo-key-leak.test.ts",
   "tests/agent-run.test.ts",
   "README.md",
