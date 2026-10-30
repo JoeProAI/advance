@@ -8,6 +8,9 @@
  *   1. Qloo lift score: 0.5 x normalized affinity + 0.5 x normalized lift vs
  *      the REFERENCE_PANEL mean (the same score the live router uses).
  *   2. Biggest metros: 2020 Census metro population, descending.
+ *   3. Combined (added after the first result): a fixed 50/50 blend of
+ *      normalized metro population and the Qloo lift score. The weight was
+ *      declared up front and was NOT tuned on these tours.
  * Hits = predicted cities that appear in the real routing. Report hits/K
  * per act and in aggregate. A paid LLM-only baseline is intentionally
  * omitted: no paid spend is allowed in this project.
@@ -24,9 +27,11 @@ import { cellsToCities, matchSearchHit } from "../lib/qloo/parse";
 import { cityHeatmapParams } from "../lib/qloo/request";
 import {
   BASELINE_CACHE_KEY,
+  COMBINED_WEIGHT,
   REFERENCE_PANEL,
   buildBaseline,
   cityId,
+  combinedScores,
   scoreCities,
   type Baseline,
 } from "../lib/scoring/lift";
@@ -49,8 +54,10 @@ type ActResult = {
   k: number;
   liftHits: number;
   metroHits: number;
+  combinedHits: number;
   liftRecall: number;
   metroRecall: number;
+  combinedRecall: number;
 };
 
 const marketIds = new Set(US_CITIES.map(cityId));
@@ -128,8 +135,12 @@ async function main() {
 
     const liftTop = new Set(scored.slice(0, k).map(cityId));
     const metroTop = new Set(metroRank.slice(0, k));
+    const combinedTop = new Set(
+      combinedScores(scored, metroRank, METRO_POP_MILLIONS).slice(0, k).map((row) => row.id),
+    );
     const liftHits = realIds.filter((id) => liftTop.has(id)).length;
     const metroHits = realIds.filter((id) => metroTop.has(id)).length;
+    const combinedHits = realIds.filter((id) => combinedTop.has(id)).length;
 
     results.push({
       act: entry.act,
@@ -139,34 +150,44 @@ async function main() {
       k,
       liftHits,
       metroHits,
+      combinedHits,
       liftRecall: liftHits / k,
       metroRecall: metroHits / k,
+      combinedRecall: combinedHits / k,
     });
-    console.log(`${entry.act}: lift ${liftHits}/${k}, metros ${metroHits}/${k}`);
+    console.log(`${entry.act}: lift ${liftHits}/${k}, metros ${metroHits}/${k}, combined ${combinedHits}/${k}`);
   }
 
   const mean = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0);
   const summary = {
     generatedAt: new Date().toISOString(),
     method:
-      "Hit rate at K = distinct real tour cities mapped to the 36 Settlement markets. Qloo lift = 0.5 x normalized affinity + 0.5 x normalized lift vs the 12-act reference panel mean. Metros = top K by 2020 Census metro population. LLM-only baseline omitted: no paid spend.",
+      "Hit rate at K = distinct real tour cities mapped to the 36 Settlement markets. Qloo lift = 0.5 x normalized affinity + 0.5 x normalized lift vs the 12-act reference panel mean. Metros = top K by 2020 Census metro population. Combined = a fixed 50/50 blend of normalized metro population and lift score, declared before it was run and added after the first lift-vs-metros result. LLM-only baseline omitted: no paid spend.",
+    combinedWeight: COMBINED_WEIGHT,
     acts: results.length,
     meanLiftRecall: mean(results.map((row) => row.liftRecall)),
     meanMetroRecall: mean(results.map((row) => row.metroRecall)),
+    meanCombinedRecall: mean(results.map((row) => row.combinedRecall)),
     totalLiftHits: results.reduce((sum, row) => sum + row.liftHits, 0),
     totalMetroHits: results.reduce((sum, row) => sum + row.metroHits, 0),
+    totalCombinedHits: results.reduce((sum, row) => sum + row.combinedHits, 0),
     totalCities: results.reduce((sum, row) => sum + row.k, 0),
     wins: {
-      lift: results.filter((row) => row.liftHits > row.metroHits).length,
-      metros: results.filter((row) => row.metroHits > row.liftHits).length,
-      ties: results.filter((row) => row.liftHits === row.metroHits).length,
+      lift: results.filter((row) => row.liftHits > row.metroHits && row.liftHits > row.combinedHits).length,
+      metros: results.filter((row) => row.metroHits > row.liftHits && row.metroHits > row.combinedHits).length,
+      combined: results.filter((row) => row.combinedHits > row.liftHits && row.combinedHits > row.metroHits).length,
+      ties: results.filter((row) => {
+        const best = Math.max(row.liftHits, row.metroHits, row.combinedHits);
+        const winners = [row.liftHits, row.metroHits, row.combinedHits].filter((h) => h === best).length;
+        return winners > 1;
+      }).length,
     },
     perAct: results,
     skipped,
   };
   await writeFile("data/backtest/results.json", `${JSON.stringify(summary, null, 2)}\n`);
-  console.log(`\nMean recall at K: lift ${(summary.meanLiftRecall * 100).toFixed(1)}%, metros ${(summary.meanMetroRecall * 100).toFixed(1)}%`);
-  console.log(`Wins: lift ${summary.wins.lift}, metros ${summary.wins.metros}, ties ${summary.wins.ties}`);
+  console.log(`\nMean recall at K: lift ${(summary.meanLiftRecall * 100).toFixed(1)}%, metros ${(summary.meanMetroRecall * 100).toFixed(1)}%, combined ${(summary.meanCombinedRecall * 100).toFixed(1)}%`);
+  console.log(`Wins: lift ${summary.wins.lift}, metros ${summary.wins.metros}, combined ${summary.wins.combined}, ties ${summary.wins.ties}`);
 }
 
 void main();

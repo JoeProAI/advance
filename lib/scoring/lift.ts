@@ -22,6 +22,12 @@ export const REFERENCE_PANEL = [
 ] as const;
 
 export const LIFT_WEIGHT = 0.5;
+/**
+ * Backtest-only second method, added after the first lift-vs-metros result:
+ * a fixed 50/50 blend of normalized metro population and the Qloo lift score.
+ * The weight is declared a priori, not tuned on the backtest tours.
+ */
+export const COMBINED_WEIGHT = 0.5;
 export const BASELINE_CACHE_KEY = "advance:baseline:v1";
 
 export type Baseline = {
@@ -75,6 +81,27 @@ export function scoreCities(candidates: CandidateCity[], baseline: Baseline | nu
       baseline: base,
       lift,
       score: (1 - w) * normAffinity(city.affinity) + w * normLift(lift),
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Combined ranking over every market: weight x normalized metro population +
+ * (1 - weight) x the city lift score (0 for markets absent from the heatmap).
+ */
+export function combinedScores(
+  scored: ScoredCity[],
+  marketIds: string[],
+  metroPop: Record<string, number>,
+  weight = COMBINED_WEIGHT,
+): Array<{ id: string; score: number }> {
+  const liftById = new Map(scored.map((city) => [cityId(city), city.score]));
+  const pops = marketIds.map((id) => metroPop[id] ?? 0);
+  const normPop = normalizer(pops);
+  return marketIds
+    .map((id, i) => ({
+      id,
+      score: weight * normPop(pops[i]) + (1 - weight) * (liftById.get(id) ?? 0),
     }))
     .sort((a, b) => b.score - a.score);
 }

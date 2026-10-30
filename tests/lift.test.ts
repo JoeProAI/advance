@@ -52,3 +52,46 @@ describe("buildCityBoard", () => {
     expect(board.find((r) => r.name === "Madison")!.note).toBe("scored below the cities on this run");
   });
 });
+
+describe("combinedScores", () => {
+  it("blends metro population and lift score at the declared 50/50 weight", async () => {
+    const { combinedScores, COMBINED_WEIGHT } = await import("@/lib/scoring/lift");
+    expect(COMBINED_WEIGHT).toBe(0.5);
+    const baseline2 = buildBaseline([
+      {
+        name: "panel",
+        cities: [
+          city("New York", "NY", 0.9),
+          city("Asheville", "NC", 0.1),
+          city("Cleveland", "OH", 0.5),
+        ],
+      },
+    ]);
+    const scored = scoreCities(
+      [
+        city("New York", "NY", 0.9),
+        city("Asheville", "NC", 0.95),
+        city("Cleveland", "OH", 0.2),
+      ],
+      baseline2,
+    );
+    const markets = ["New York, NY", "Asheville, NC", "Cleveland, OH", "Nowhere, ZZ"];
+    const pops = {
+      "New York, NY": 20,
+      "Asheville, NC": 0.5,
+      "Cleveland, OH": 2,
+      "Nowhere, ZZ": 0.1,
+    };
+    const ranked = combinedScores(scored, markets, pops);
+    // New York wins: biggest metro (pop-normalized 1.0) plus a real lift score.
+    expect(ranked[0]!.id).toBe("New York, NY");
+    // The smallest market is the pop floor and lands last.
+    expect(ranked[ranked.length - 1]!.id).toBe("Nowhere, ZZ");
+    // Cleveland's mid-size population keeps it above the floor despite no lift.
+    expect(ranked.find((row) => row.id === "Cleveland, OH")!.score).toBeGreaterThan(0);
+    // An under-indexing small market with a real lift edge outranks pure size.
+    expect(
+      ranked.findIndex((row) => row.id === "Asheville, NC"),
+    ).toBeLessThan(ranked.findIndex((row) => row.id === "Nowhere, ZZ"));
+  });
+});

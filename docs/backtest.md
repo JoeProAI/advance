@@ -22,13 +22,27 @@ For each tour:
    12-act reference panel mean - the same score the live router uses).
 3. Take the top K cities. Hits = predicted cities that appear in the real routing.
 4. Baseline: top K US cities by 2020 Census metro population. Same K, same scoring.
+5. Combined (added second, after the first lift-vs-metros result was already
+   measured): `combinedScores` = 0.5 x normalized metro population + 0.5 x the
+   Qloo lift score over all 36 markets. The 50/50 weight (`COMBINED_WEIGHT` in
+   `lib/scoring/lift.ts`) was declared before the combined run and was NOT
+   tuned on these tours.
 
-Reported numbers: per-act hits/K, mean recall at K across tours, head-to-head
-wins, and totals. Since predictions and reals are both K cities, precision and
-recall at K are equal; the page reports the hit rate.
+Order the work happened in: the lift-vs-metros comparison was run live first
+(29 scored acts, 6 skipped), then the combined ranking was added as a second
+method in response. The results file records `combinedWeight` so the declared
+weight travels with the numbers.
+
+Reported numbers: per-act hits/K per method, mean recall at K per method,
+outright-winner counts (a method wins a tour only when its hits beat BOTH
+others), ties, totals, and the skipped acts with their reasons. Since
+predictions and reals are both K cities, precision and recall at K are equal;
+the page reports the hit rate.
 
 An LLM-only baseline is intentionally omitted: comparing against a paid model
-would require spend, which is not allowed in this project.
+would require spend, which is not allowed in this project. Acts with no
+matching Qloo entity or no usable heatmap are skipped and listed in
+`skipped`, not scored as misses.
 
 ## Reproduce
 
@@ -41,6 +55,9 @@ that committed file; it never calls Qloo at request time.
 
 ## Honest caveats
 
+- "Where they played" is not pure taste. Bookers route where rooms, offers and
+  drive legs exist, and those cluster in big metros, so the biggest-metros
+  baseline is strong by construction.
 - Small N. Routing is shaped by offers, holds and drive legs, not just taste.
 - Only 36 markets are scored; real tours hit rooms this product cannot name.
 - A miss where the real tour hit a room outside the 36 markets is excluded from K.
