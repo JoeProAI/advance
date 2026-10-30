@@ -174,7 +174,7 @@ export default async function ProofPage() {
               <p>{results.method}</p>
               <ul className="mt-2 list-disc pl-5">
                 <li>
-                  "Where they played" is not pure taste. Bookers route where rooms, offers, and
+                  Where they played is not pure taste. Bookers route where rooms, offers, and
                   drive legs exist, and those cluster in big metros. A biggest-metros list is a
                   strong baseline because real routing is conservative, not because taste does not
                   matter.
