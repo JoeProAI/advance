@@ -30,6 +30,7 @@ import {
   type Baseline,
   type ScoredCity,
 } from "@/lib/scoring/lift";
+import { routeWithoutQloo } from "@/lib/scoring/without-qloo";
 import { createId } from "@/lib/utils";
 import { resolveWriter, writeBrief, writeSummary } from "@/lib/agent/write";
 import type {
@@ -634,6 +635,15 @@ async function runWithinDeadline(
   const datePlan = assignDatesDetailed(routed.cities.length, request.startDate);
   const dates = datePlan.dates;
 
+  // Same router, same cap, cities ranked by 2020 Census metro population
+  // instead of taste. Zero Qloo calls.
+  const withoutQloo = routeWithoutQloo({
+    showCount: request.showCount,
+    maxDriveHours: request.maxDriveHours,
+    homeCity: home,
+    qlooStops: routed.cities,
+  });
+
   await emit(
     step(
       "Taste analysis",
@@ -778,6 +788,7 @@ async function runWithinDeadline(
     thinData: thin,
     ...(swaps.length ? { swaps } : {}),
     cityBoard,
+    withoutQloo,
     scoring: {
       method: `score = ${(1 - LIFT_WEIGHT).toFixed(1)} x normalized affinity + ${LIFT_WEIGHT.toFixed(1)} x normalized lift (act score minus the panel mean per city)`,
       panel: baseline.value?.panel ?? [],

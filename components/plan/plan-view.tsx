@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { APP_NAME } from "@/lib/config";
+import { cityId } from "@/lib/scoring/lift";
 import type { AgentStep, RoutedStop, TourPlan } from "@/lib/types";
 import { formatAffinity, formatHours, formatMiles } from "@/lib/utils";
 import { AgentLog } from "@/components/plan/agent-log";
@@ -21,9 +22,47 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
   const [openStop, setOpenStop] = useState<RoutedStop | null>(null);
   const [copied, setCopied] = useState(false);
   const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [routeView, setRouteView] = useState<"with" | "without">("with");
   const receipts = plan?.receipts;
+  const withoutQloo = plan?.withoutQloo;
   const log = steps ?? plan?.steps ?? [];
-  const stops = plan?.route?.stops ?? [];
+  const stops = useMemo(() => plan?.route?.stops ?? [], [plan]);
+  const boardById = useMemo(
+    () => new Map((plan?.cityBoard ?? []).map((row) => [`${row.name}, ${row.region}`, row])),
+    [plan],
+  );
+  const sharedSet = useMemo(() => new Set(withoutQloo?.shared ?? []), [withoutQloo]);
+  const qlooOnlyStops = stops.filter((stop) => !sharedSet.has(cityId(stop.city)));
+  const changedCount = withoutQloo ? qlooOnlyStops.length : 0;
+  const mapStops: RoutedStop[] = useMemo(() => {
+    if (routeView !== "without" || !withoutQloo) {
+      return stops;
+    }
+    return withoutQloo.cities.map(
+      (city, index): RoutedStop => ({
+        order: index + 1,
+        date: "",
+        city: { name: city.name, region: city.region, country: "US", lat: city.lat, lon: city.lon },
+        affinity: 0,
+        affinityRank: 0,
+        venue: {
+          entityId: "",
+          name: "",
+          city: city.name,
+          affinity: 0,
+          popularity: 0,
+          estimatedRoom: "",
+          why: "",
+          tags: [],
+        },
+        openers: [],
+        overlap: 0,
+        brief: { audience: "", podcasts: [], bars: [], brands: [], socialPost: "" },
+        driveHoursFromPrev: 0,
+        milesFromPrev: 0,
+      }),
+    );
+  }, [routeView, withoutQloo, stops]);
   const shareUrl = useMemo(() => {
     if (!plan || typeof window === "undefined") {
       return "";
@@ -110,8 +149,40 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
         </p>
       ) : null}
 
+      {withoutQloo && stops.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-line)] px-5 py-3 md:px-8">
+          <div className="flex gap-1" role="tablist" aria-label="Route comparison">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={routeView === "with"}
+              onClick={() => setRouteView("with")}
+              className={`btn ${routeView === "with" ? "btn-carbon" : "btn-ghost"}`}
+            >
+              With Qloo
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={routeView === "without"}
+              onClick={() => setRouteView("without")}
+              className={`btn ${routeView === "without" ? "btn-carbon" : "btn-ghost"}`}
+            >
+              Without Qloo (biggest metros)
+            </button>
+          </div>
+          <p className="text-sm text-[var(--color-muted)]">
+            Qloo changed {changedCount} of {stops.length} stops.
+          </p>
+        </div>
+      ) : null}
+
       <div className="grid items-start gap-0 xl:grid-cols-[1.15fr_0.85fr]">
-        <TourMap stops={stops} selectedOrder={openStop?.order} onSelect={selectStop} />
+        <TourMap
+          stops={mapStops}
+          selectedOrder={routeView === "with" ? openStop?.order : undefined}
+          onSelect={routeView === "with" ? selectStop : () => undefined}
+        />
         <aside className="border-t border-[var(--color-line)] xl:border-t-0 xl:border-l">
           <div className="border-b border-[var(--color-line)] px-4 py-3">
             <p className="ticket-kicker text-[var(--color-muted)]">Dispatch log</p>
@@ -179,7 +250,11 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
       <section className="px-5 py-8 md:px-8">
         <div className="mb-4 flex items-end justify-between">
           <h2 className="display text-3xl">Itinerary</h2>
-          {plan?.route ? (
+          {routeView === "without" && withoutQloo ? (
+            <p className="ticket-kicker text-[var(--color-muted)]">
+              {formatMiles(withoutQloo.totalMiles)} · biggest metros
+            </p>
+          ) : plan?.route ? (
             <p className="ticket-kicker text-[var(--color-muted)]">
               {formatMiles(plan.route.totalMiles)} · {formatHours(plan.route.totalDriveHours)} ·{" "}
               {plan.route.nights} nights
@@ -190,7 +265,56 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
             </p>
           )}
         </div>
-        {stops.length === 0 ? (
+        {routeView === "without" && withoutQloo ? (
+          <div className="overflow-x-auto">
+            <p className="mb-3 max-w-3xl text-sm text-[var(--color-muted)]">{withoutQloo.method}</p>
+            <table className="w-full min-w-[36rem] border-collapse text-left text-sm">
+              <thead className="ticket-kicker text-[var(--color-muted)]">
+                <tr>
+                  <th className="w-14 border-b border-[var(--color-line)] py-2 pr-3">Stop</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">City</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Metro (millions)</th>
+                  <th className="border-b border-[var(--color-line)] py-2 pr-3">Qloo run</th>
+                </tr>
+              </thead>
+              <tbody>
+                {withoutQloo.cities.map((city, index) => {
+                  const key = `${city.name}, ${city.region}`;
+                  const onQloo = sharedSet.has(cityId(city));
+                  return (
+                    <tr key={key}>
+                      <td className="border-b border-[var(--color-line)] py-3 pr-3">
+                        <span className="highway-shield mx-auto">{String(index + 1).padStart(2, "0")}</span>
+                      </td>
+                      <td className="border-b border-[var(--color-line)] py-3 pr-3">{key}</td>
+                      <td className="border-b border-[var(--color-line)] py-3 pr-3 font-mono">
+                        {city.metroMillions.toFixed(1)}
+                      </td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-3 text-[var(--color-muted)]">
+                        {onQloo ? "also on the Qloo run" : "Qloo cut this stop"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {qlooOnlyStops.length > 0 ? (
+              <p className="mt-4 max-w-3xl text-sm text-[var(--color-muted)]">
+                Stops only taste data picks:{" "}
+                {qlooOnlyStops
+                  .map((stop) => {
+                    const row = boardById.get(cityId(stop.city));
+                    const lift =
+                      typeof row?.lift === "number"
+                        ? ` (${row.lift >= 0 ? "+" : ""}${formatAffinity(row.lift)} lift)`
+                        : "";
+                    return `${cityId(stop.city)}${lift}`;
+                  })
+                  .join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        ) : stops.length === 0 ? (
           <p className="border border-dashed border-[var(--color-line)] px-4 py-8 text-[var(--color-muted)]">
             Empty run. Stamp a coupon on the issue if this link has no dates.
           </p>
