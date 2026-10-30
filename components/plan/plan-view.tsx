@@ -20,6 +20,8 @@ type PlanViewProps = {
 export function PlanView({ plan, steps, live, error }: PlanViewProps) {
   const [openStop, setOpenStop] = useState<RoutedStop | null>(null);
   const [copied, setCopied] = useState(false);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const receipts = plan?.receipts;
   const log = steps ?? plan?.steps ?? [];
   const stops = plan?.route?.stops ?? [];
   const shareUrl = useMemo(() => {
@@ -67,6 +69,21 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
             <a href={`/api/plans/${plan.id}/csv`} className="desk-link">
               <Button variant="ghost">Export CSV</Button>
             </a>
+            {receipts ? (
+              <>
+                <Button
+                  variant="ghost"
+                  onClick={() => setReceiptsOpen(true)}
+                  aria-expanded={receiptsOpen}
+                >
+                  {receipts.totals.calls} Qloo calls · {(receipts.totals.ms / 1000).toFixed(1)} s ·{" "}
+                  {receipts.invented} invented
+                </Button>
+                <a href={`/api/plans/${plan.id}/receipt`} className="desk-link">
+                  <Button variant="ghost">Download receipt JSON</Button>
+                </a>
+              </>
+            ) : null}
           </div>
         ) : live ? (
           <Button variant="ghost" disabled loading>
@@ -246,7 +263,85 @@ export function PlanView({ plan, steps, live, error }: PlanViewProps) {
         )}
       </section>
 
-      {openStop ? <StopBrief stop={openStop} onClose={() => setOpenStop(null)} /> : null}
+      {openStop ? <StopBrief stop={openStop} calls={receipts?.calls} onClose={() => setOpenStop(null)} /> : null}
+
+      {receiptsOpen && receipts ? (
+        <div
+          className="fixed inset-0 z-50 bg-[var(--color-overlay)]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Qloo call receipts"
+        >
+          <aside className="paper absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col overflow-hidden">
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] p-4">
+              <div>
+                <h2 className="display text-3xl text-[var(--color-ink)]">
+                  {receipts.totals.calls} Qloo calls · {(receipts.totals.ms / 1000).toFixed(1)} s ·{" "}
+                  {receipts.invented} invented
+                </h2>
+                <p className="mt-1 text-sm text-[var(--color-muted)]">
+                  Every call behind this plan. Requests were sent with X-Api-Key: [redacted].{" "}
+                  {receipts.totals.live} live · {receipts.totals.cache} cache · {receipts.totals.shared}{" "}
+                  shared · {receipts.totals.mock} mock · {receipts.totals.errors} errors ·{" "}
+                  {receipts.checkedEntities} entities checked
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReceiptsOpen(false)}
+                className="btn btn-ghost text-[var(--color-ink)]"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="ticket-kicker text-[var(--color-muted)]">
+                  <tr>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">#</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">Purpose</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">Call</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">Source</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">ms</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">Results</th>
+                    <th className="border-b border-[var(--color-line)] py-2 pr-2">Entity IDs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {receipts.calls.map((call) => (
+                    <tr key={call.n} className="align-top">
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2 font-mono">{call.n}</td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2">{call.purpose}</td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2 font-mono text-xs">
+                        {call.path}
+                        {Object.keys(call.params).length ? (
+                          <span className="block break-all text-[var(--color-muted)]">
+                            {Object.entries(call.params)
+                              .map(([key, value]) => `${key}=${value}`)
+                              .join("&")}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2">
+                        {call.source}
+                        {call.httpStatus ? ` ${call.httpStatus}` : ""}
+                      </td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2 font-mono">{call.ms}</td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2 font-mono">
+                        {call.resultCount}
+                      </td>
+                      <td className="border-b border-[var(--color-line)] py-2 pr-2 font-mono text-xs break-all">
+                        {call.entityIds.slice(0, 4).join(", ")}
+                        {call.entityIds.length > 4 ? ` +${call.entityIds.length - 4}` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }
