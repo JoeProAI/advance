@@ -94,6 +94,7 @@ async function main() {
   }
 
   const results: ActResult[] = [];
+  const skipped: { act: string; reason: string }[] = [];
   for (const entry of tours) {
     const realIds = [...new Set(entry.dates.map((row) => row.city))].filter((id) => marketIds.has(id));
     if (realIds.length === 0) {
@@ -110,9 +111,18 @@ async function main() {
     const match = matchSearchHit(entry.act, found.results.entities);
     if (!match.ok) {
       console.error(`skip ${entry.act}: no Qloo entity`);
+      skipped.push({ act: entry.act, reason: "no matching Qloo entity" });
       continue;
     }
-    const heat = await client.insights(cityHeatmapParams({ entityId: match.entity.entity_id }));
+    let heat: Awaited<ReturnType<typeof client.insights>>;
+    try {
+      heat = await client.insights(cityHeatmapParams({ entityId: match.entity.entity_id }));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message.slice(0, 160) : String(error);
+      console.error(`skip ${entry.act}: heatmap unavailable (${reason})`);
+      skipped.push({ act: entry.act, reason: "Qloo heatmap unavailable for this entity" });
+      continue;
+    }
     const candidates = isHeatmapResponse(heat) ? cellsToCities(heat.results.heatmap) : [];
     const scored = scoreCities(candidates, baseline);
 
@@ -152,6 +162,7 @@ async function main() {
       ties: results.filter((row) => row.liftHits === row.metroHits).length,
     },
     perAct: results,
+    skipped,
   };
   await writeFile("data/backtest/results.json", `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`\nMean recall at K: lift ${(summary.meanLiftRecall * 100).toFixed(1)}%, metros ${(summary.meanMetroRecall * 100).toFixed(1)}%`);
